@@ -23,7 +23,7 @@ No build step. Serve the folder with any static server:
 
     npm start        # python3 -m http.server 8080
 
-Deploys as-is to GitHub Pages or any static host.
+Live at https://exyoff.github.io/StickBurn/ — every push to `main` is copied to the `gh-pages` branch, which GitHub Pages serves.
 
 ## Test
 

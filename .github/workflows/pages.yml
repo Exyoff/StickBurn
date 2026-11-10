@@ -1,0 +1,13 @@
+# The site is served from the gh-pages branch. Keep it identical to main.
+name: Publish to GitHub Pages
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git push --force origin HEAD:gh-pages
