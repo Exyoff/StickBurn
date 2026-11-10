@@ -9,13 +9,19 @@ Nobody tells you which size fits.
 
 ## Play
 
-- **Move** with your left thumb, **look** by dragging anywhere else, **tap** things to use them. Keyboard: WASD, drag to look, C to crouch.
-- Tap a part on the shelf to grab it. Parts lie any way up: **Turn** and **Flip** it until it faces the way it fits, hold it up to its place on the engine, and **drop it in**. Up close an outline shows green (lines up), amber (wrong way round) or red (something missing or in the way). **Put down** rests it where you are looking.
-- Pick a spanner size and **press and hold** a bolt to turn it. **↻ / ↺** flips the ratchet. **Crouch** to reach the underside.
-- Tap a fitted part to take it off again once its bolts are undone.
-- **Energy, hunger, thirst**: eat at the fridge or stove, drink from a tap, sleep in the bed. At zero energy you collapse and lose hours.
-- A day lasts **15 minutes**. Progress saves automatically in the browser.
-- When you think the engine is done, hit **Start**. Order is only enforced where it is physically necessary, so a forgotten head gasket or loose rod caps show up on the first start.
+You look with a crosshair and act with buttons, My Summer Car style.
+
+- **Left stick** walks, **right stick** looks. The dot in the middle of the screen is what you act on; its name appears under it.
+- Point at a part on the shelf and press **Grab**. Parts lie any way up: **Turn** and **Flip** the one you are carrying until it
+  faces the way it fits, hold it up to its place on the engine, and press **Drop in**. Up close an outline shows green (lines up),
+  amber (wrong way round) or red (something missing or in the way). Spark plugs, the belt and the chain fit any way round.
+  **Put down** rests a part where you are looking.
+- Pick a spanner size along the bottom, point at a bolt and hold **Tighten**. **Loosen** undoes it. **Crouch** to reach the underside.
+- Point at a fitted part with all its bolts undone and press **Take off**.
+- A day lasts **15 minutes**; the bed skips the night. Progress saves automatically in the browser.
+- Keyboard: WASD walk, arrows or mouse-drag look, E act, R turn, F flip, Z tighten, X loosen, C crouch, 1–8 spanner.
+
+Order is only enforced where it is physically necessary. Starting the engine, and hunger, thirst and energy, are switched off for now.
 
 ## Models
 
@@ -51,10 +57,10 @@ Live at https://exyoff.github.io/StickBurn/ — every push to `main` is copied t
 - `js/engine.js` — every engine part: geometry, bolts, what it needs and what it covers
 - `js/car.js` — the coupe: lofted body shell, wheels, cabin, engine bay
 - `js/world.js` — garage floor plan, living quarters, colliders
-- `js/main.js` — player, touch controls, carrying parts, survival, day cycle, HUD, save, start-up diagnosis
+- `js/main.js` — player, joysticks and buttons, crosshair aiming, carrying parts, day cycle, HUD, save
 - `js/audio.js` — synthesised sounds
 - `vendor/` — three.js r170 (MIT)
 
 ## Not built yet
 
-Lifting the finished engine into the car, driving, the bathroom doing anything, and whatever is behind the side door.
+Starting the engine, lifting it into the car, driving, hunger/thirst/energy, the kitchen and bathroom doing anything, and whatever is behind the side door.

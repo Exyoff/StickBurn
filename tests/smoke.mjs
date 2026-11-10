@@ -1,4 +1,5 @@
-// Smoke test: boots the game in headless Chromium at phone size and plays through the core loop.
+// Smoke test: boots the game in headless Chromium at phone size and plays through the core loop
+// using only the on-screen controls (crosshair, buttons) plus the keyboard for walking.
 // Run with a static server on :8080 (npm start), then: NODE_PATH=$(npm root -g) npm test
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
@@ -14,7 +15,15 @@ page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 await page.goto(URL);
 await page.waitForFunction(() => window.__game);
 await page.click('#mActs button');
-const settle = () => page.waitForTimeout(1200);
+const targetIs = (kind, id) => page.waitForFunction(([k, i]) => { const t = __game.state.target; return t && t.kind === k && t.id === i; }, [kind, id], { timeout: 30000 });
+const label = () => page.locator('#actBtn').textContent();
+const holdButton = async (sel, until) => {
+  const box = await page.locator(sel).boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  if (typeof until === 'number') await page.waitForTimeout(until); else await page.waitForFunction(until, null, { timeout: 60000 });
+  await page.mouse.up();
+};
 
 // every model is sound: finite, no zero-area triangles, solids closed and facing outwards
 const audit = await page.evaluate(() => __game.audit());
@@ -24,78 +33,67 @@ assert.ok(audit.meshes > 200 && audit.tris > 50000);
 // every part starts loose on the shelf at the back of the garage
 assert.equal(await page.evaluate(() => __game.parts.filter((p) => p.state === 'loose').length), 34);
 assert.ok(await page.evaluate(() => __game.parts.filter((p) => p.state === 'loose').every((p) => p.loose[2] < 12)));
+// spark plugs and belts go on any way round; other parts have to be turned
+assert.ok(await page.evaluate(() => ['plug1', 'plug4', 'belt', 'chain'].every((id) => __game.isOriented(__game.byId[id]))));
+assert.equal(await page.evaluate(() => __game.isOriented(__game.byId.crank)), false);
 
-// walls stop the player: hold "forward" into the back wall
+// walls stop the player: hold "forward" towards the bed
 await page.evaluate(() => { Object.assign(__game.player, { x: 45, z: 30, yaw: 0, pitch: 0 }); });
 await page.keyboard.down('KeyW'); await page.waitForTimeout(4000); await page.keyboard.up('KeyW');
 const pz = await page.evaluate(() => __game.player.z);
 assert.ok(pz < 30 && pz > 13, `player should walk forward and stop at the bed, z=${pz}`);
 
-// walk up to the shelf, tap the crankshaft to pick it up
-await page.evaluate(() => { const g = __game; Object.assign(g.player, { x: g.byId.crank.loose[0], z: 17 }); g.lookAt(g.byId.crank.loose[0], g.byId.crank.loose[1] + 0.3, 4); });
-await settle();
-let pt = await page.evaluate(() => __game.screenOf(__game.byId.crank.group));
-await page.mouse.click(pt.x, pt.y);
+// the look stick turns the view
+const yaw0 = await page.evaluate(() => __game.player.yaw);
+const ls = await page.locator('#look').boundingBox();
+await page.mouse.move(ls.x + ls.width / 2, ls.y + ls.height / 2); await page.mouse.down();
+await page.mouse.move(ls.x + ls.width - 4, ls.y + ls.height / 2); await page.waitForTimeout(1500); await page.mouse.up();
+assert.ok((await page.evaluate(() => __game.player.yaw)) < yaw0 - 0.2, 'look stick turns right');
+
+// walk up to the shelf, put the crosshair on the crankshaft, Grab
+await page.evaluate(() => { const g = __game, c = g.centreOf(g.byId.crank.group); Object.assign(g.player, { x: c[0], z: 17, crouch: false }); g.lookAt(...c); });
+await targetIs('loose', 'crank');
+assert.equal(await label(), 'Grab');
+await page.click('#actBtn');
 assert.equal(await page.evaluate(() => __game.state.held), 'crank');
 
-// it comes off the shelf lying the wrong way up
-assert.equal(await page.evaluate(() => __game.isOriented(__game.byId.crank)), false);
-
-// carry it to the engine: the wrong way round, it will not go in
+// carry it to the engine: the wrong way round it will not go in
 await page.evaluate(() => { const g = __game; Object.assign(g.player, { x: 10, z: 27, crouch: true }); g.lookAt(10, 9.6, 21.5); g.byId.crank.rot.copy(g.ORI.find((q) => Math.abs(q.y) > 0.7 && Math.abs(q.w) > 0.7)); });
-await settle();
-assert.equal(await page.locator('#stripAct').textContent(), 'Put down');
-await page.evaluate(() => __game.tryFit());
-assert.equal(await page.evaluate(() => __game.byId.crank.installed), false, 'a part turned the wrong way must not fit');
-
-// quarter turns bring it round; then it drops in
+await page.waitForFunction(() => document.getElementById('aim').textContent.includes('Wrong way round'), null, { timeout: 30000 });
+assert.equal(await label(), 'Put down');
 for (let i = 0; i < 4 && !(await page.evaluate(() => __game.isOriented(__game.byId.crank))); i++) await page.click('#turnBtn');
-assert.equal(await page.evaluate(() => __game.isOriented(__game.byId.crank)), true);
-await page.waitForFunction(() => document.getElementById('stripAct').textContent === 'Drop in', null, { timeout: 20000 });
-await page.click('#stripAct');
+await page.waitForFunction(() => document.getElementById('actBtn').textContent === 'Drop in', null, { timeout: 30000 });
+await page.click('#actBtn');
 assert.equal(await page.evaluate(() => __game.byId.crank.installed), true);
 
-// main cap bolt from underneath: wrong spanner, then the right one
-// a bolted part can be picked up and fitted too
-await page.evaluate(() => { const g = __game; g.hold(g.byId.maincap1); g.byId.maincap1.rot.identity(); });
+// a main cap bolt from underneath: wrong spanner, then the right one
 await page.evaluate(() => {
-  const g = __game, b = g.byId.maincap1.bolts[1];
-  g.install(g.byId.maincap1);
+  const g = __game, p = g.byId.maincap1, b = p.bolts[1];
+  g.hold(p); p.rot.identity(); g.install(p);
   const w = b.head.getWorldPosition(g.camera.position.clone());
   Object.assign(g.player, { x: w.x, z: w.z + 3.4, crouch: true });
   g.lookAt(w.x, w.y, w.z);
 });
-await settle();
-pt = await page.evaluate(() => __game.boltScreen(__game.byId.maincap1.bolts[1]));
+await targetIs('bolt', 'maincap1');
 await page.click('#tools button[data-tool="10"]');
-await page.mouse.move(pt.x, pt.y); await page.mouse.down(); await page.waitForTimeout(400); await page.mouse.up();
+await holdButton('#tightBtn', 600);
 assert.equal(await page.evaluate(() => __game.byId.maincap1.bolts[1].tight), 0, 'wrong spanner must not turn the bolt');
 await page.click('#tools button[data-tool="17"]');
-await page.mouse.move(pt.x, pt.y); await page.mouse.down();
-await page.waitForFunction(() => __game.byId.maincap1.bolts[1].tight === 1, null, { timeout: 60000 });
-await page.mouse.up();
+await holdButton('#tightBtn', () => __game.byId.maincap1.bolts[1].tight === 1);
+assert.match(await page.locator('#aim').textContent(), /1\/2 tight · 17 mm/);
 
-// survival: needs drain, taps and food refill them, bed advances the clock
-await page.evaluate(() => { Object.assign(__game.stats, { energy: 30, hunger: 40, thirst: 40 }); });
-await page.evaluate(() => __game.use('sink'));
-await page.waitForTimeout(700);
-await page.evaluate(() => __game.use('food'));
-const st = await page.evaluate(() => ({ ...__game.stats }));
-assert.ok(st.thirst > 60 && st.hunger > 70, JSON.stringify(st));
-await page.waitForTimeout(700);
-const before = await page.evaluate(() => __game.time.day + __game.time.t);
-await page.evaluate(() => __game.use('bed'));
-await page.waitForFunction(() => !__game.state.busy && __game.stats.energy > 90, null, { timeout: 30000 });
-assert.ok((await page.evaluate(() => __game.time.day + __game.time.t)) - before > 0.2, 'sleeping passes hours');
+// a bolted part will not come off; undo the bolt and it does
+assert.equal(await label(), 'Take off');
+await page.click('#actBtn');
+assert.equal(await page.evaluate(() => __game.byId.maincap1.installed), true);
+await holdButton('#looseBtn', () => __game.byId.maincap1.bolts[1].tight === 0);
+await page.click('#actBtn');
+assert.equal(await page.evaluate(() => __game.state.held), 'maincap1');
 
-// diagnosis catches mistakes, and a complete build runs
+// finishing the engine is noticed
 await page.evaluate(() => __game.buildAll(true));
-assert.deepEqual(await page.evaluate(() => __game.diagnose()), { fail: null, loud: false });
-await page.evaluate(() => { __game.byId.oilpan.bolts[3].tight = 0; });
-assert.ok((await page.evaluate(() => __game.diagnose())).fail.leak);
-await page.evaluate(() => { const g = __game; g.buildAll(true); Object.assign(g.player, { x: 22, z: 34, crouch: false }); g.lookAt(10, 9, 21.5); });
-await page.click('#startBtn');
-await page.waitForFunction(() => __game.state.won, null, { timeout: 90000 });
+assert.equal(await page.locator('#sBolts').textContent(), '91/91');
+assert.equal(await page.evaluate(() => __game.state.done), true);
 await page.screenshot({ path: process.env.SHOT || 'tests/running.png' });
 
 assert.deepEqual(errors, []);

@@ -10,78 +10,63 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>Bolt by Bolt</title>
 <style>
-  :root { --panel:rgba(20,21,24,.82); --line:#3a3c41; --ink:#eceae4; --dim:#a3a39c; --acc:#f2b632; --bad:#e2533f;
-    --energy:#f2b632; --hunger:#e0794a; --thirst:#4fa8e0; }
+  :root { --panel:rgba(20,21,24,.78); --line:#3a3c41; --ink:#eceae4; --dim:#a3a39c; --acc:#f2b632; --bad:#e2533f;
+    --sl:env(safe-area-inset-left); --sr:env(safe-area-inset-right); --sb:env(safe-area-inset-bottom); --st:env(safe-area-inset-top); }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { margin:0; height:100%; overflow:hidden; background:#000; color:var(--ink);
     font:15px/1.35 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     user-select:none; -webkit-user-select:none; touch-action:none; overscroll-behavior:none; }
   [hidden] { display:none !important; }
   canvas#c { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; }
-  button { font:inherit; color:var(--ink); background:rgba(42,44,48,.92); border:1px solid var(--line); border-radius:10px;
-    min-height:44px; padding:0 14px; font-weight:600; }
-  button:active { transform:translateY(1px); background:#34363b; }
+  button { font:inherit; color:var(--ink); background:rgba(42,44,48,.86); border:1px solid var(--line); border-radius:12px;
+    min-height:46px; padding:0 12px; font-weight:600; touch-action:none; }
+  button:active, button.down { background:#4a4d54; }
   button.on, button.primary { background:var(--acc); color:#1b1503; border-color:var(--acc); }
   button.danger { background:var(--bad); border-color:var(--bad); color:#fff; }
+  button:disabled { opacity:.45; }
 
-  #top { position:fixed; left:0; right:0; top:0; display:flex; gap:8px; align-items:flex-start;
-    padding:calc(8px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) 0 calc(10px + env(safe-area-inset-left));
-    pointer-events:none; }
-  #top > * { pointer-events:auto; }
-  #status { width:168px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:6px 9px 7px;
-    font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums; pointer-events:none; }
-  #clock { color:var(--ink); font-weight:700; font-size:14px; display:flex; justify-content:space-between; }
-  #clock span { color:var(--dim); font-weight:500; font-size:12px; }
-  .stat { display:flex; align-items:center; gap:6px; margin-top:4px; }
-  .stat label { width:44px; font-size:11px; }
-  .stat .track { flex:1; height:6px; background:#2e3034; border-radius:3px; overflow:hidden; }
-  .stat i { display:block; height:100%; width:100%; border-radius:3px; }
-  .stat.low label { color:var(--bad); font-weight:700; }
-  #sEnergy { background:var(--energy); } #sHunger { background:var(--hunger); } #sThirst { background:var(--thirst); }
-  #spacer { flex:1; pointer-events:none; }
+  #status { position:fixed; left:calc(10px + var(--sl)); top:calc(8px + var(--st)); background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; padding:5px 10px 6px; font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums; pointer-events:none; }
+  #status b { color:var(--ink); }
+  #cTime { font-size:14px; font-weight:700; color:var(--ink); }
+  #menuBtn { position:fixed; right:calc(10px + var(--sr)); top:calc(8px + var(--st)); min-width:46px; }
 
-  #cross { position:fixed; left:50%; top:50%; width:6px; height:6px; margin:-3px 0 0 -3px; border-radius:50%;
-    background:rgba(255,255,255,.55); box-shadow:0 0 0 1px rgba(0,0,0,.4); pointer-events:none; }
-  #stick { position:fixed; width:120px; height:120px; margin:-60px 0 0 -60px; border-radius:50%;
-    border:2px solid rgba(255,255,255,.28); background:rgba(255,255,255,.06); pointer-events:none; }
-  #stick i { position:absolute; left:50%; top:50%; width:52px; height:52px; margin:-26px 0 0 -26px; border-radius:50%; background:rgba(255,255,255,.35); }
+  /* crosshair and what it is pointing at */
+  #cross { position:fixed; left:50%; top:50%; width:8px; height:8px; margin:-4px 0 0 -4px; border-radius:50%;
+    background:rgba(255,255,255,.7); box-shadow:0 0 0 1.5px rgba(0,0,0,.45); pointer-events:none; transition:transform .1s, background .1s; }
+  #cross.hot { background:var(--acc); transform:scale(1.7); }
+  #aim { position:fixed; left:50%; top:calc(50% + 18px); transform:translateX(-50%); max-width:min(320px, 70vw); text-align:center;
+    font-size:13px; text-shadow:0 1px 3px #000, 0 0 2px #000; pointer-events:none; }
+  #aim b { display:block; font-size:14px; }
+  #aim span { color:#d9d6cc; }
 
-  #bottom { position:fixed; left:0; right:0; bottom:0; display:flex; gap:6px; align-items:flex-end;
-    padding:0 calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
-    pointer-events:none; }
-  #bottom > * { pointer-events:auto; }
-  #tools { flex:1; min-width:0; display:flex; gap:5px; overflow-x:auto; scrollbar-width:none; touch-action:pan-x; }
+  /* joysticks */
+  .stick { position:fixed; border-radius:50%; border:2px solid rgba(255,255,255,.3); background:rgba(255,255,255,.07); touch-action:none; }
+  .stick i { position:absolute; left:50%; top:50%; border-radius:50%; background:rgba(255,255,255,.4); pointer-events:none; }
+  #move { width:128px; height:128px; left:calc(18px + var(--sl)); bottom:calc(72px + var(--sb)); }
+  #move i { width:54px; height:54px; margin:-27px 0 0 -27px; }
+  #look { width:96px; height:96px; right:calc(26px + var(--sr)); bottom:calc(258px + var(--sb)); }
+  #look i { width:42px; height:42px; margin:-21px 0 0 -21px; }
+
+  /* action buttons */
+  #pad { position:fixed; right:calc(10px + var(--sr)); bottom:calc(66px + var(--sb)); display:grid; grid-template-columns:92px 92px; gap:8px; }
+  #pad button { min-height:50px; padding:0 4px; }
+  #actBtn { grid-column:1 / 3; min-height:54px; }
+  #tools { position:fixed; left:calc(8px + var(--sl)); right:calc(8px + var(--sr)); bottom:calc(8px + var(--sb)); display:flex; gap:5px;
+    overflow-x:auto; scrollbar-width:none; touch-action:pan-x; }
   #tools::-webkit-scrollbar { display:none; }
-  #tools button { flex:0 0 auto; min-width:44px; padding:0 6px; font-variant-numeric:tabular-nums; }
+  #tools button { flex:1 0 auto; min-width:42px; padding:0 4px; font-variant-numeric:tabular-nums; }
   #tools button small { display:block; font-size:9px; font-weight:500; opacity:.7; margin-top:-3px; }
-  #side { position:fixed; right:calc(8px + env(safe-area-inset-right)); bottom:calc(62px + env(safe-area-inset-bottom));
-    display:flex; flex-direction:column; gap:8px; }
-  #side button { min-width:96px; }
 
-  #strip { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(64px + env(safe-area-inset-bottom));
-    width:min(360px, calc(100% - 128px)); margin-left:-52px; background:var(--panel); border:1px solid var(--line); border-radius:12px;
-    padding:7px 7px 7px 11px; display:flex; align-items:center; gap:8px; }
-  #strip .txt { flex:1; min-width:0; }
-  #strip .txt b { display:block; }
-  #strip .txt span { font-size:12px; color:var(--dim); display:block; }
-  #strip button { min-height:40px; padding:0 11px; }
-
-  #toast { position:fixed; left:50%; top:calc(104px + env(safe-area-inset-top)); transform:translateX(-50%);
+  #toast { position:fixed; left:50%; top:calc(64px + var(--st)); transform:translateX(-50%);
     max-width:calc(100% - 28px); background:#0d0d0ee6; border:1px solid var(--line); border-radius:10px; padding:8px 14px;
     text-align:center; opacity:0; transition:opacity .2s; pointer-events:none; }
   #toast.show { opacity:1; }
   #fade { position:fixed; inset:0; background:#000; opacity:0; transition:opacity .9s; pointer-events:none; }
   #fade.on { opacity:1; pointer-events:auto; }
-  #vignette { position:fixed; inset:0; pointer-events:none; opacity:0; transition:opacity 1s;
-    background:radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,.85) 100%); }
-
-  #throttle { position:fixed; right:calc(10px + env(safe-area-inset-right)); top:42%; transform:translateY(-50%);
-    background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px 6px; text-align:center; font-size:11px; color:var(--dim); }
-  #throttle input { writing-mode:vertical-lr; direction:rtl; height:130px; width:28px; touch-action:none; accent-color:var(--acc); }
-  #rpm { color:var(--ink); font-weight:700; font-variant-numeric:tabular-nums; font-size:13px; }
 
   #modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; padding:18px; }
-  #modal .box { background:#1d1e21; border:1px solid var(--line); border-radius:16px; padding:18px; width:min(440px, 100%); max-height:92%; overflow:auto; touch-action:pan-y; }
+  #modal .box { background:#1d1e21; border:1px solid var(--line); border-radius:16px; padding:18px; width:min(460px, 100%); max-height:92%; overflow:auto; touch-action:pan-y; }
   #modal h2 { margin:0 0 8px; font-size:20px; letter-spacing:.02em; }
   #modal .body { color:#d0cec8; }
   #modal .body p { margin:8px 0; }
@@ -89,47 +74,36 @@
   #modal .body ul { padding-left:20px; margin:8px 0; }
   #modal .acts { display:flex; gap:8px; margin-top:14px; }
   #modal .acts button { flex:1; }
+
+  @media (orientation:landscape) and (max-height:480px) {
+    #look { bottom:calc(196px + var(--sb)); right:calc(60px + var(--sr)); width:88px; height:88px; }
+    #move { bottom:calc(66px + var(--sb)); }
+    #tools { left:calc(160px + var(--sl)); right:calc(210px + var(--sr)); }
+    #pad { bottom:calc(8px + var(--sb)); }
+  }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="vignette"></div>
 <div id="cross"></div>
-<div id="stick" hidden><i></i></div>
+<div id="aim"></div>
 
-<div id="top">
-  <div id="status">
-    <div id="clock"><b id="cTime">Day 1 · 08:00</b></div>
-    <div class="stat" id="rEnergy"><label>Energy</label><div class="track"><i id="sEnergy"></i></div></div>
-    <div class="stat" id="rHunger"><label>Hunger</label><div class="track"><i id="sHunger"></i></div></div>
-    <div class="stat" id="rThirst"><label>Thirst</label><div class="track"><i id="sThirst"></i></div></div>
-    <div style="margin-top:5px"><b id="sBolts" style="color:var(--ink)">0/0</b> bolts · <b id="sParts" style="color:var(--ink)">0/0</b> parts</div>
-  </div>
-  <div id="spacer"></div>
-  <button id="startBtn" class="primary">Start</button>
-  <button id="menuBtn" aria-label="Menu">☰</button>
-</div>
-
+<div id="status"><div id="cTime">Day 1 · 08:00</div><b id="sBolts">0/0</b> bolts · <b id="sParts">0/0</b> parts</div>
+<button id="menuBtn" aria-label="Menu">☰</button>
 <div id="toast"></div>
 
-<div id="strip" hidden>
-  <div class="txt"><b id="stripName"></b><span id="stripSub"></span></div>
-  <button id="stripAct"></button>
-  <button id="stripClose" aria-label="Close">✕</button>
-</div>
+<div id="move" class="stick" aria-label="Move"><i></i></div>
+<div id="look" class="stick" aria-label="Look"><i></i></div>
 
-<div id="throttle" hidden>
-  <div id="rpm">900</div>rpm<br>
-  <input id="thr" type="range" min="900" max="5500" value="900" aria-label="Throttle">
-</div>
-
-<div id="side">
+<div id="pad">
   <button id="turnBtn" hidden>⟳ Turn</button>
   <button id="flipBtn" hidden>⤵ Flip</button>
-  <button id="dirBtn">↻ Tighten</button>
-  <button id="crouchBtn">Crouch</button>
+  <button id="tightBtn">↻ Tighten</button>
+  <button id="looseBtn">↺ Loosen</button>
+  <button id="actBtn" class="primary" disabled>Use</button>
+  <button id="crouchBtn" style="grid-column:1 / 3; min-height:40px">Crouch</button>
 </div>
-<div id="bottom"><div id="tools"></div></div>
+<div id="tools"></div>
 
 <div id="fade"></div>
 <div id="modal" hidden><div class="box"><h2 id="mTitle"></h2><div class="body" id="mBody"></div><div class="acts" id="mActs"></div></div></div>

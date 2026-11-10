@@ -1,11 +1,11 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { RoomEnvironment } from '../vendor/RoomEnvironment.js';
-import { buildEngine, buildStand, buildSpanner, setTight, setCrank, EXHAUST_TIP } from './engine.js';
+import { buildEngine, buildStand, buildSpanner, setTight, setCrank } from './engine.js';
 import { buildWorld, ROOM, ENGINE_POS, SHELF } from './world.js';
-import { sfx, motor, unlockAudio } from './audio.js';
+import { sfx, unlockAudio } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
-const SAVE_KEY = 'bolt-by-bolt-save-v4';
+const SAVE_KEY = 'bolt-by-bolt-save-v5';
 const SIZES = [8, 10, 12, 13, 14, 16, 17, 19];
 const DAY_SECONDS = 900;                 // one full day
 const REACH = 24, BOLT_REACH = 17;       // 2.4 m to grab, 1.7 m to wrench
@@ -38,8 +38,8 @@ const engineRoot = new THREE.Group();
 engineRoot.position.copy(ENGINE_POS);
 const stand = buildStand(-ENGINE_POS.y);
 stand.position.copy(ENGINE_POS);
-const looseRoot = new THREE.Group();
-scene.add(engineRoot, stand, looseRoot);
+const looseRoot = new THREE.Group(), heldRoot = new THREE.Group();
+scene.add(engineRoot, stand, looseRoot, heldRoot);
 for (const [x0, x1, z0, z1] of [[-2, 2, -0.9, 0.9], [-0.5, 0.5, -3.3, -0.9]])
   world.colliders.push({ x0: ENGINE_POS.x + x0, x1: ENGINE_POS.x + x1, z0: ENGINE_POS.z + z0, z1: ENGINE_POS.z + z1 });
 
@@ -55,18 +55,19 @@ const spanner = buildSpanner();
 spanner.visible = false;
 scene.add(spanner);
 const ghostMat = new THREE.MeshBasicMaterial({ color: 0x4cff7a, transparent: true, opacity: 0.35, depthWrite: false });
-const heldRoot = new THREE.Group();
-scene.add(heldRoot);
 
 /* ================= game state ================= */
-const player = { x: 39, z: 80, yaw: 0.6, pitch: -0.12, crouch: false, eye: EYE };
-const stats = { energy: 100, hunger: 100, thirst: 100 };
+const SPAWN = { x: 39, z: 80, yaw: 0.6, pitch: -0.12, crouch: false };
+const player = { ...SPAWN, eye: EYE };
 const time = { day: 1, t: 8 / 24 };
-let tool = 'hand', dir = 1;
-let held = null, selected = null, turning = null;
-let playTime = 0, won = false, busy = false;
-const known = {};
-let run = null;
+let tool = 13;                            // spanner size in the hand, mm
+let held = null;                          // part being carried
+let turning = null;                       // bolt under the spanner right now
+let wrench = 0;                           // +1 tightening, -1 loosening, while the button is held
+let wrenchNote = false;                   // one complaint per press
+let target = null;                        // what the crosshair is on
+let busy = false, done = false;
+const known = {};                         // part id -> spanner size the player has found out
 
 /* ---------- parts lying around ---------- */
 const bb = new THREE.Box3();
@@ -80,17 +81,21 @@ for (let i = 0; i < ORI.length; i++) for (const a of ['x', 'y']) {
   if (!ORI.some((o) => o.angleTo(q) < 0.01)) ORI.push(q);
 }
 // Parts that look the same after a turn about one axis accept those turns too ("y2" = half turn about Y).
+// Spark plugs, the belt and the chain go on whichever way you happen to be holding them.
 const SYM = { piston: 'y2', maincap: 'y2', gasket: 'y2', head: 'y2', oilpan: 'y2', cranksprocket: 'x4', camsprocket: 'x4', pulley: 'x4', flywheel: 'x4', oilfilter: 'z4' };
+const ANY_WAY = ['plug', 'belt', 'chain'];
 for (const p of fitted) {
+  const kind = p.id.replace(/\d+$/, '');
   p.pivot = bb.setFromObject(p.group).getCenter(new THREE.Vector3());   // centre of the part, in engine coordinates
   p.holdDist = clamp(bb.getSize(v1).length() * 0.55 + 4.5, 5.5, 9);
   p.rot = new THREE.Quaternion();        // how the part is turned relative to how it fits
   p.rotShow = new THREE.Quaternion();
+  p.anyWay = ANY_WAY.includes(kind);
   p.syms = [new THREE.Quaternion()];
-  const s = SYM[p.id.replace(/\d+$/, '')];
+  const s = SYM[kind];
   if (s) for (let n = 1; n < +s[1]; n++) p.syms.push(quarter(s[0], (n * 4) / +s[1]));
 }
-const isOriented = (p, q = p.rot) => p.syms.some((o) => o.angleTo(q) < 0.02);
+const isOriented = (p, q = p.rot) => p.anyWay || p.syms.some((o) => o.angleTo(q) < 0.02);
 
 function pose(p, q) {
   p.group.quaternion.copy(q).multiply(p.baseQuat);
@@ -116,7 +121,7 @@ function stockShelf() {
     let q = ORI[0];
     for (let k = 0; k < 16; k++) {
       const c = ORI[1 + Math.floor(rnd() * 23)], s = pose(p, c).getSize(v2);
-      if (s.y <= 4.5 && s.z <= 5.4 && s.x <= 9 && !isOriented(p, c)) { q = c; break; }
+      if (s.y <= 4.5 && s.z <= 5.4 && s.x <= 9 && (p.anyWay || !isOriented(p, c))) { q = c; break; }
     }
     const b = pose(p, q).getSize(v2).clone();
     if (cur + b.x > SHELF.x1 && row < SHELF.levels.length) { row++; cur = SHELF.x0; }
@@ -136,7 +141,6 @@ const reasonInstall = (p) => {
 };
 const reasonRemove = (p) => {
   if (p.id === 'block') return 'That stays on the stand';
-  if (held) return 'Your hands are full';
   if (p.bolts.some((b) => b.tight > 0)) return 'Undo all of its bolts first';
   const dep = parts.find((q) => q.installed && q.req.includes(p.id));
   if (dep) return `Take the ${dep.name.toLowerCase()} off first`;
@@ -162,7 +166,7 @@ function outlineOf(o) {
 let ghost = null, inRange = false, fitNote = '';
 // Pick a part up: it hangs in front of you, turned however it was lying.
 function hold(p) {
-  held = p; selected = null; p.state = 'held'; p.installed = false;
+  held = p; p.state = 'held'; p.installed = false;
   heldRoot.add(p.group);
   p.rotShow.copy(p.rot);
   ghost = outlineOf(p.group);                      // faint outline of where it goes, shown only up close
@@ -201,19 +205,11 @@ function updateHeld(dt) {
   ghost.visible = near;
   ghostMat.color.set(why ? 0xff5a45 : ok ? 0x4cff7a : 0xffc040);
   ghostMat.opacity = 0.3 + 0.14 * Math.sin(performance.now() * 0.006);
-  const note = !near ? 'Turn it the right way round, then hold it up to the engine'
-    : why || (ok ? 'Lines up — drop it in' : 'Wrong way round — Turn or Flip it');
+  const note = !near ? (ok ? 'Hold it up to where it goes on the engine' : 'Turn it the right way round, then hold it up to the engine')
+    : why || (ok ? 'Lines up' : 'Wrong way round — Turn or Flip it');
   if (note !== fitNote || near !== inRange) { fitNote = note; inRange = near; refresh(); }
 }
 const canFit = () => !!held && inRange && !reasonInstall(held) && isOriented(held);
-function tryFit() {
-  if (!held) return;
-  if (!inRange) return toast('Hold it up to where it goes on the engine');
-  const why = reasonInstall(held);
-  if (why) { sfx.wrong(); return toast(why); }
-  if (!isOriented(held)) { sfx.wrong(); return toast("It won't go on that way round"); }
-  install(held);
-}
 function dropSpot() {
   ray.setFromCamera(new THREE.Vector2(0, -0.15), camera);
   const h = ray.intersectObjects(world.surfaces, false)[0];
@@ -247,10 +243,10 @@ function uninstall(p) {
 
 /* ---------- save ---------- */
 function save() {
-  const data = { parts: {}, known, playTime, won, stats, time, player: [player.x, player.z, player.yaw] };
+  const data = { parts: {}, known, time, tool, player: [player.x, player.z, player.yaw] };
   for (const p of fitted) {
     data.parts[p.id] = p.installed ? { b: p.bolts.map((b) => +b.tight.toFixed(2)) }
-      : { l: (p.state === 'held' ? p.loose || p.home : p.loose).map((n) => +n.toFixed(2)) };
+      : { l: (p.state === 'held' ? p.loose || p.home : p.loose).map((n) => +n.toFixed(3)) };
   }
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch {}
 }
@@ -265,80 +261,46 @@ function load() {
     else if (s.l && s.l.length === 7) placeSaved(p, s.l);
   }
   Object.assign(known, data.known || {});
-  Object.assign(stats, data.stats || {});
   Object.assign(time, data.time || {});
+  if (SIZES.includes(data.tool)) tool = data.tool;
   if (data.player) [player.x, player.z, player.yaw] = data.player;
-  playTime = data.playTime || 0; won = !!data.won;
   return true;
 }
 function resetGame() {
-  stopEngine();
   releaseHeld();
   for (const p of fitted) { p.bolts.forEach((b) => setTight(b, 0)); placeSaved(p, p.home); }
   for (const k in known) delete known[k];
-  Object.assign(stats, { energy: 100, hunger: 100, thirst: 100 });
   Object.assign(time, { day: 1, t: 8 / 24 });
-  Object.assign(player, { x: 39, z: 80, yaw: 0.6, pitch: -0.12, crouch: false });
-  playTime = 0; won = false; selected = null; oil.scale.setScalar(0.001);
-  setCrank(parts, 0);
+  Object.assign(player, SPAWN);
+  done = false;
   save(); refresh();
 }
 const buzz = (ms) => { try { navigator.vibrate && navigator.vibrate(ms); } catch {} };
 
-/* ================= survival & time ================= */
+/* ================= time of day ================= */
 function advance(hours) {
   time.t += hours / 24;
   while (time.t >= 1) { time.t -= 1; time.day++; }
 }
-function fadeThen(fn) {
+function sleep() {
+  const h = time.t * 24;
+  if (h > 6 && h < 20) return toast("It's broad daylight. Come back when it's dark.");
+  if (held) drop();
   busy = true;
   $('fade').classList.add('on');
-  setTimeout(() => { fn(); setTimeout(() => { $('fade').classList.remove('on'); busy = false; }, 500); }, 950);
-}
-function sleep(forced) {
-  if (run) return toast('Not with the engine running');
-  if (!forced && stats.energy > 85) return toast("You're not tired");
-  if (held) drop();
-  const hours = forced ? 9 : clamp(Math.ceil((100 - stats.energy) / 12.5), 1, 8);
-  fadeThen(() => {
-    advance(hours);
-    stats.energy = forced ? 65 : Math.min(100, stats.energy + hours * 12.5);
-    stats.hunger = Math.max(forced ? 20 : 5, stats.hunger - hours * 3);
-    stats.thirst = Math.max(forced ? 20 : 5, stats.thirst - hours * 4);
+  setTimeout(() => {
+    advance((31 - h) % 24 || 24);                       // until 07:00
     Object.assign(player, { x: 44, z: 18, yaw: -1.2, pitch: -0.1, crouch: false });
-    save(); refresh();
-    toast(forced ? 'You collapsed. You wake up in bed, hours later.' : `You slept ${hours} hour${hours > 1 ? 's' : ''}.`, 3000);
-  });
+    save(); applyTime(); refresh();
+    toast('Morning.', 2500);
+    setTimeout(() => { $('fade').classList.remove('on'); busy = false; }, 500);
+  }, 950);
 }
-let lastUse = 0;
-function use(what) {
-  const now = performance.now();
-  if (now - lastUse < 500) return;
-  lastUse = now;
-  if (what === 'bed') return sleep(false);
-  if (what === 'sink') {
-    if (stats.thirst > 97) return toast("You can't drink any more");
-    stats.thirst = Math.min(100, stats.thirst + 30); sfx.drink(); toast('Tap water. Cold.');
-  } else if (what === 'food') {
-    if (stats.hunger > 95) return toast("You're full");
-    stats.hunger = Math.min(100, stats.hunger + 35); stats.thirst = Math.max(0, stats.thirst - 4); sfx.eat(); toast('Sausage and macaroni.');
-  } else if (what === 'toilet') toast('Not now.');
-  else if (what === 'car') toast('Rolling shell, gearbox in. No engine — that part is on you.');
-  else if (what === 'sidedoor') toast('Locked. The key is somewhere.');
-  refresh();
-}
-const warned = {};
-function tickStats(dt) {
-  const starving = stats.hunger <= 0 || stats.thirst <= 0;
-  stats.hunger = Math.max(0, stats.hunger - dt * (100 / 720));
-  stats.thirst = Math.max(0, stats.thirst - dt * (100 / 540));
-  stats.energy = Math.max(0, stats.energy - dt * (100 / 900) * (starving ? 3 : 1) - (turning ? dt * 0.25 : 0) - (held ? dt * 0.04 : 0));
-  for (const [k, msg] of [['hunger', "You're getting hungry"], ['thirst', "You're thirsty"], ['energy', "You're exhausted — get to bed"]]) {
-    if (stats[k] < 20 && !warned[k]) { warned[k] = true; toast(msg, 2600); }
-    if (stats[k] > 30) warned[k] = false;
-  }
-  if (stats.energy <= 0 && !busy) { stopEngine(); sleep(true); }
-}
+const USE = {
+  bed: { name: 'Bed', verb: 'Sleep', run: sleep },
+  car: { name: 'The car', verb: 'Look', run: () => toast('Rolling shell, gearbox in. No engine — that part is on you.', 2600) },
+  sidedoor: { name: 'Side door', verb: 'Open', run: () => toast('Locked. The key is somewhere.') },
+};
 const SKY_DAY = new THREE.Color(0x86bff0), SKY_NIGHT = new THREE.Color(0x05070d), SKY_DUSK = new THREE.Color(0xf0a268), sky = new THREE.Color();
 function applyTime() {
   const h = time.t * 24;
@@ -379,225 +341,242 @@ function modal(title, html, acts = [['OK']]) {
 }
 const HELP = `
 <ul>
-<li><b>Move</b> with your left thumb, <b>look</b> by dragging anywhere else. <b>Tap</b> things to use them. (Keyboard: WASD, drag to look, C to crouch.)</li>
-<li>The engine parts are on the <b>shelf at the back</b>, lying any way up. Tap one to grab it. <b>Turn</b> and <b>Flip</b> it until it faces the way it fits, hold it up to its place on the engine, and <b>drop it in</b>.</li>
-<li>An outline shows up close: <b>green</b> lines up, <b>amber</b> is the wrong way round, <b>red</b> means something is missing or in the way.</li>
-<li>Every bolt goes in loose. Pick a <b>spanner size</b>, then <b>press and hold</b> a bolt. Nobody tells you the size. <b>↻ / ↺</b> flips the ratchet.</li>
-<li><b>Crouch</b> to get at the underside of the engine.</li>
-<li>Tap a fitted part to take it off again once its bolts are undone.</li>
-<li>Watch <b>energy, hunger and thirst</b>: eat at the fridge or stove, drink from a tap, sleep in the bed. Run out of energy and you collapse.</li>
-<li>A day lasts 15 minutes. When the engine is done, hit <b>Start</b>.</li>
+<li><b>Left stick</b> walks, <b>right stick</b> looks. Whatever the <b>dot</b> in the middle of the screen is on is what you act on.</li>
+<li>The engine parts are on the <b>shelf at the back</b>. Point at one and press <b>Grab</b>.</li>
+<li>Parts lie any way up. <b>Turn</b> and <b>Flip</b> the one you're carrying until it faces the way it fits, hold it up to its place on the engine, and press <b>Drop in</b>. Up close an outline shows <b>green</b> when it lines up, <b>amber</b> when it's the wrong way round, <b>red</b> when something is missing or in the way.</li>
+<li>Every bolt goes in loose. Pick a <b>spanner size</b> along the bottom, point at a bolt and hold <b>Tighten</b>. Nobody tells you the size. <b>Loosen</b> undoes it.</li>
+<li><b>Crouch</b> to get at the underside. Point at a fitted part with all its bolts undone and press <b>Take off</b>.</li>
+<li>A day lasts 15 minutes. The bed skips the night.</li>
+<li>Keyboard: WASD walk, arrows or mouse-drag look, E act, R turn, F flip, Z tighten, X loosen, C crouch, 1–8 spanner.</li>
 </ul>`;
 
 function buildTools() {
-  const box = $('tools');
-  const mk = (label, sub, val) => {
+  for (const s of SIZES) {
     const b = document.createElement('button');
-    b.innerHTML = `${label}<small>${sub}</small>`;
-    b.dataset.tool = val;
-    b.onclick = () => { unlockAudio(); sfx.ui(); tool = val; refresh(); };
-    box.appendChild(b);
-  };
-  mk('✋', 'hand', 'hand');
-  for (const s of SIZES) mk(String(s), 'mm', s);
+    b.innerHTML = `${s}<small>mm</small>`;
+    b.dataset.tool = s;
+    b.onclick = () => setTool(s);
+    $('tools').appendChild(b);
+  }
+}
+function setTool(s) { unlockAudio(); sfx.ui(); tool = s; refresh(); }
+
+// What the main button would do right now.
+function action() {
+  if (held) return canFit() ? { label: 'Drop in', run: () => install(held) } : { label: 'Put down', run: drop, plain: true };
+  if (!target) return null;
+  if (target.kind === 'loose') return { label: 'Grab', run: () => { sfx.pick(); hold(target.part); } };
+  if (target.kind === 'use') return { label: USE[target.what].verb, run: USE[target.what].run };
+  const p = target.part;
+  if (p.id === 'block') return null;
+  return { label: 'Take off', plain: !!reasonRemove(p), run: () => { const why = reasonRemove(p); if (why) { sfx.wrong(); toast(why); } else uninstall(p); } };
 }
 function refresh() {
   const tight = parts.reduce((n, p) => n + (p.installed ? p.bolts.filter((b) => b.tight >= 1).length : 0), 0);
+  const inst = fitted.filter((p) => p.installed).length;
   $('sBolts').textContent = `${tight}/${totalBolts}`;
-  $('sParts').textContent = `${fitted.filter((p) => p.installed).length}/${fitted.length}`;
-  $('dirBtn').textContent = dir > 0 ? '↻ Tighten' : '↺ Loosen';
-  $('dirBtn').classList.toggle('danger', dir < 0);
+  $('sParts').textContent = `${inst}/${fitted.length}`;
   $('crouchBtn').classList.toggle('on', player.crouch);
   for (const b of $('tools').children) b.classList.toggle('on', String(tool) === b.dataset.tool);
-  $('startBtn').textContent = run ? 'Stop' : 'Start';
-  $('startBtn').classList.toggle('danger', !!run);
-  $('startBtn').classList.toggle('primary', !run);
-  $('throttle').hidden = !(run && run.phase === 'run');
-  $('bottom').hidden = !!run; $('dirBtn').hidden = !!run || !!held;
   $('turnBtn').hidden = $('flipBtn').hidden = !held;
+  $('tightBtn').hidden = $('looseBtn').hidden = !!held;
 
-  const strip = $('strip');
-  if (held) {
-    const fit = canFit();
-    $('stripName').textContent = held.name;
-    $('stripSub').textContent = fitNote;
-    $('stripAct').textContent = fit ? 'Drop in' : 'Put down'; $('stripAct').className = fit ? 'primary' : ''; $('stripAct').hidden = false;
-    strip.hidden = false;
-  } else if (selected && !run) {
-    const n = selected.bolts.length, t = selected.bolts.filter((b) => b.tight >= 1).length;
-    $('stripName').textContent = selected.name;
-    $('stripSub').textContent = selected.id === 'block' ? 'Bolted to the stand'
-      : n ? `${t}/${n} tight${known[selected.id] ? ` · ${known[selected.id]} mm` : ''}` : 'No bolts — just sits in place';
-    $('stripAct').textContent = 'Remove'; $('stripAct').className = 'danger';
-    $('stripAct').hidden = selected.id === 'block';
-    strip.hidden = false;
-  } else strip.hidden = true;
-}
-function refreshStats() {
-  for (const [k, id, row] of [['energy', 'sEnergy', 'rEnergy'], ['hunger', 'sHunger', 'rHunger'], ['thirst', 'sThirst', 'rThirst']]) {
-    $(id).style.width = `${stats[k]}%`;
-    $(row).classList.toggle('low', stats[k] < 20);
+  const act = action();
+  $('actBtn').textContent = act ? act.label : 'Use';
+  $('actBtn').disabled = !act;
+  $('actBtn').className = act && !act.plain ? 'primary' : '';
+
+  // crosshair caption
+  let title = '', sub = '';
+  if (held) { title = held.name; sub = fitNote; }
+  else if (target && target.kind === 'loose') title = target.part.name;
+  else if (target && target.kind === 'use') title = USE[target.what].name;
+  else if (target) {
+    const p = target.part, n = p.bolts.length, t = p.bolts.filter((b) => b.tight >= 1).length;
+    title = p.name;
+    sub = p.id === 'block' ? '' : n ? `${t}/${n} tight${known[p.id] ? ` · ${known[p.id]} mm` : ''}` : 'no bolts';
+    if (target.kind === 'bolt') sub = `bolt ${target.bolt.tight >= 1 ? 'tight' : target.bolt.tight <= 0 ? 'loose' : 'part-way'} · ${sub}`;
   }
-  $('vignette').style.opacity = clamp(1 - Math.min(stats.energy, stats.hunger + 12, stats.thirst + 12) / 18, 0, 1);
+  $('aim').innerHTML = title ? `<b>${title}</b><span>${sub}</span>` : '';
+  $('cross').classList.toggle('hot', !!(held ? inRange : target));
+
+  if (!done && inst === fitted.length && tight === totalBolts) {
+    done = true; sfx.win();
+    modal('Every bolt is in.', `<p>${fitted.length} parts, ${totalBolts} bolts, all tight. Finished on day ${time.day}.</p><p>Getting it into the car and running comes next.</p>`, [['Nice', null, 'primary']]);
+  }
+  if (inst < fitted.length || tight < totalBolts) done = false;
 }
 
-$('dirBtn').onclick = () => { unlockAudio(); sfx.ui(); dir = -dir; refresh(); };
-$('crouchBtn').onclick = () => { player.crouch = !player.crouch; refresh(); };
-$('stripClose').onclick = () => { if (held) drop(); selected = null; refresh(); };
-$('turnBtn').onclick = () => rotateHeld('turn');
-$('flipBtn').onclick = () => rotateHeld('flip');
-$('stripAct').onclick = () => {
-  if (held) return canFit() ? install(held) : drop();
-  if (!selected) return;
-  const why = reasonRemove(selected);
-  if (why) { sfx.wrong(); toast(why); } else uninstall(selected);
-};
-$('menuBtn').onclick = () => modal('Bolt by Bolt', HELP, [
-  ['Start over', () => modal('Start over?', '<p>Every part goes back on the shelf, every bolt comes undone, and it is day one again.</p>', [['Cancel'], ['Start over', resetGame, 'danger']]), 'danger'],
-  ['Back to work', null, 'primary'],
-]);
-$('startBtn').onclick = () => { unlockAudio(); run ? stopEngine() : startEngine(); };
-$('thr').oninput = (e) => { if (run) run.target = +e.target.value; };
-
-/* ================= picking ================= */
+/* ================= aiming ================= */
 const ray = new THREE.Raycaster();
-const ndc = new THREE.Vector2();
+const CENTRE = new THREE.Vector2(0, 0);
 const partOf = (o) => { while (o && !o.userData.partId) o = o.parent; return o ? byId[o.userData.partId] : null; };
 const useOf = (o) => { while (o && !o.userData.use) o = o.parent; return o ? o.userData.use : null; };
 const toScreen = (v) => { v.project(camera); return v.z > 1 ? null : { x: ((v.x + 1) / 2) * window.innerWidth, y: ((1 - v.y) / 2) * window.innerHeight }; };
 const pickRoots = [engineRoot, looseRoot, world.group];
-function hitsAt(x, y) {
-  ndc.set((x / window.innerWidth) * 2 - 1, -(y / window.innerHeight) * 2 + 1);
-  ray.setFromCamera(ndc, camera);
-  return ray.intersectObjects(pickRoots, true);
-}
-// Nearest visible bolt to a screen point, with a finger-sized tolerance.
-function findBolt(x, y) {
+// Nearest visible bolt to a screen point, with a generous tolerance.
+function findBolt(x, y, tol = 34) {
   const cands = [];
   for (const p of parts) {
     if (!p.installed) continue;
     for (const b of p.bolts) {
       b.head.getWorldPosition(v1);
       const dist = v1.distanceTo(camera.position);
+      if (dist > REACH + 4) continue;
       const pos = v1.clone(), s = toScreen(v1);
       if (!s) continue;
       const d = Math.hypot(s.x - x, s.y - y);
-      if (d < 34) cands.push({ b, d, pos, dist });
+      if (d < tol) cands.push({ b, d, pos, dist });
     }
   }
   cands.sort((a, b) => a.d - b.d);
   for (const c of cands) {
     ray.set(camera.position, v2.copy(c.pos).sub(camera.position).normalize());
-    const h = ray.intersectObjects(pickRoots, true).find((i) => partOf(i.object) !== held);
+    const h = ray.intersectObjects(pickRoots, true)[0];
     if (!h || h.distance > c.dist - 0.2 || h.object.userData.bolt === c.b) return c;
   }
   return null;
 }
-function beginTurn(c) {
-  const b = c.b;
-  if (held) { toast('Your hands are full'); return; }
-  if (c.dist > BOLT_REACH) { toast('Get closer'); return; }
-  if (b.size !== tool) { sfx.wrong(); buzz(30); toast(`The ${tool} mm doesn't fit`); return; }
-  if (dir > 0 && b.tight >= 1) { toast("That one's tight"); return; }
-  if (dir < 0 && b.tight <= 0) { toast("That one's already undone"); return; }
-  turning = b; b.click = b.tight;
-  known[b.part.id] = b.size;
+// Work out what the crosshair is on.
+function aim() {
+  const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+  let t = null;
+  if (!held) {
+    const c = findBolt(cx, cy, 40);
+    if (c) t = { kind: 'bolt', bolt: c.b, part: c.b.part, dist: c.dist };
+  }
+  if (!t) {
+    ray.setFromCamera(CENTRE, camera);
+    const h = ray.intersectObjects(pickRoots, true)[0];
+    const near = h && h.distance < REACH;
+    const p = near ? partOf(h.object) : null;
+    if (p && !held) t = p.installed ? { kind: 'part', part: p } : { kind: 'loose', part: p };
+    if (!t && !held) {                                    // small parts: nearest loose one close to the dot
+      let best = 46;
+      for (const q of fitted) {
+        if (q.state !== 'loose') continue;
+        bb.setFromObject(q.group).getCenter(v1);
+        if (v1.distanceTo(camera.position) > REACH) continue;
+        const s = toScreen(v1), d = s ? Math.hypot(s.x - cx, s.y - cy) : 99;
+        if (d < best) { best = d; t = { kind: 'loose', part: q }; }
+      }
+    }
+    const what = near ? useOf(h.object) : null;
+    if (!t && what && USE[what] && !(held && what !== 'bed')) t = { kind: 'use', what };
+  }
+  const key = (x) => (x ? `${x.kind}:${x.part ? x.part.id : x.what}:${x.bolt ? x.part.bolts.indexOf(x.bolt) : ''}` : '');
+  if (key(t) !== key(target)) { target = t; refresh(); } else target = t;
 }
-function endTurn() {
-  if (turning) { save(); refresh(); }
-  turning = null;
+
+/* ---------- spanner work ---------- */
+function tickWrench(dt) {
+  if (!wrench || held || busy) return stopTurn();
+  const t = target && target.kind === 'bolt' ? target : null;
+  const complain = (msg, bad) => { if (!wrenchNote) { wrenchNote = true; if (bad) { sfx.wrong(); buzz(30); } toast(msg); } stopTurn(); };
+  if (!t) return complain('Point at a bolt');
+  const b = t.bolt;
+  if (t.dist > BOLT_REACH) return complain('Get closer');
+  if (b.size !== tool) return complain(`The ${tool} mm doesn't fit`, true);
+  if (wrench > 0 && b.tight >= 1) return complain("That one's tight");
+  if (wrench < 0 && b.tight <= 0) return complain("That one's already undone");
+  if (turning !== b) { turning = b; b.click = b.tight; known[b.part.id] = b.size; }
+  const next = clamp(b.tight + (wrench * dt) / 1.1, 0, 1);
+  setTight(b, next);
+  if (Math.abs(next - b.click) > 0.06) { b.click = next; sfx.ratchet(); }
+  b.head.getWorldPosition(spanner.position);
+  b.group.getWorldQuaternion(spanner.quaternion);
+  spanner.rotateY(1.0 + Math.sin(performance.now() * 0.012) * 0.45);
+  spanner.visible = true;
+  if (next >= 1) { sfx.tight(); buzz(25); wrenchNote = true; stopTurn(); }
+  else if (next <= 0) { sfx.loose(); buzz(10); wrenchNote = true; stopTurn(); }
+}
+function stopTurn() {
+  if (turning) { turning = null; save(); refresh(); }
   spanner.visible = false;
 }
-function handleTap(x, y) {
-  if (busy) return;
-  const list = hitsAt(x, y);
-  if (held && !run && inRange && list.some((h) => h.distance < REACH + 8 && h.object.parent && engineRoot.getObjectById(h.object.id))) return tryFit();
-  const h = list.find((i) => partOf(i.object) !== held);
-  let part = h && h.distance < REACH ? partOf(h.object) : null;
-  if (!part && !run) {                                    // small parts are hard to hit with a thumb
-    let best = 40;
-    for (const p of fitted) {
-      if (p.state !== 'loose') continue;
-      bb.setFromObject(p.group).getCenter(v1);
-      if (v1.distanceTo(camera.position) > REACH) continue;
-      const s = toScreen(v1);
-      const d = s ? Math.hypot(s.x - x, s.y - y) : 99;
-      if (d < best) { best = d; part = p; }
-    }
-  }
-  if (part && !run) {
-    if (part.installed) { selected = part; refresh(); }
-    else if (held) toast('Your hands are full');
-    else { sfx.pick(); hold(part); const why = reasonInstall(part); if (why) toast(why); }
-    return;
-  }
-  const what = h && h.distance < REACH ? useOf(h.object) : null;
-  if (what) return use(what);
-  if (selected) { selected = null; refresh(); }
-}
+function setWrench(d) { unlockAudio(); wrench = d; wrenchNote = false; if (!d) stopTurn(); }
 
 /* ================= input ================= */
-const ptrs = new Map();
-let stickId = null, stick = { x: 0, y: 0 };
+const stick = { x: 0, y: 0 }, lookStick = { x: 0, y: 0 };
 const keys = {};
-const inStickZone = (x, y) => x < window.innerWidth * 0.45 && y > window.innerHeight * 0.5;
-canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-canvas.addEventListener('pointerdown', (e) => {
-  unlockAudio();
-  if (busy) return;
-  canvas.setPointerCapture(e.pointerId);
-  const p = { x: e.clientX, y: e.clientY, ox: e.clientX, oy: e.clientY, t: performance.now(), moved: 0, mode: 'look' };
-  ptrs.set(e.pointerId, p);
-  if (typeof tool === 'number' && !run && !turning) {
-    const c = findBolt(e.clientX, e.clientY);
-    if (c) { p.mode = 'bolt'; beginTurn(c); return; }
-  }
-  if (e.pointerType !== 'mouse' && stickId === null && inStickZone(e.clientX, e.clientY)) {
-    p.mode = 'stick'; stickId = e.pointerId;
-    const el = $('stick');
-    el.style.left = `${p.ox}px`; el.style.top = `${p.oy}px`; el.firstElementChild.style.transform = '';
-    el.hidden = false;
-  }
-});
-canvas.addEventListener('pointermove', (e) => {
-  const p = ptrs.get(e.pointerId);
-  if (!p) return;
-  const dx = e.clientX - p.x, dy = e.clientY - p.y;
-  p.x = e.clientX; p.y = e.clientY;
-  p.moved += Math.abs(dx) + Math.abs(dy);
-  if (p.mode === 'look') {
-    player.yaw -= dx * 0.0052;
-    player.pitch = clamp(player.pitch - dy * 0.0052, -1.45, 1.45);
-  } else if (p.mode === 'stick') {
-    let sx = (p.x - p.ox) / 50, sy = (p.y - p.oy) / 50;
-    const m = Math.hypot(sx, sy);
-    if (m > 1) { sx /= m; sy /= m; }
-    stick.x = sx; stick.y = sy;
-    $('stick').firstElementChild.style.transform = `translate(${sx * 34}px, ${sy * 34}px)`;
-  }
-});
-function pointerEnd(e) {
-  const p = ptrs.get(e.pointerId);
-  if (!p) return;
-  ptrs.delete(e.pointerId);
-  if (p.mode === 'bolt') endTurn();
-  if (p.mode === 'stick') { stickId = null; stick.x = stick.y = 0; $('stick').hidden = true; }
-  if (p.mode !== 'bolt' && e.type === 'pointerup' && p.moved < 12 && performance.now() - p.t < 400) handleTap(e.clientX, e.clientY);
+// A fixed on-screen joystick: reports -1..1 on each axis while a finger is on it.
+function joystick(el, out) {
+  const knob = el.firstElementChild;
+  let id = null;
+  const set = (e) => {
+    const r = el.getBoundingClientRect(), half = r.width / 2;
+    let x = (e.clientX - r.left - half) / (half * 0.72), y = (e.clientY - r.top - half) / (half * 0.72);
+    const m = Math.hypot(x, y);
+    if (m > 1) { x /= m; y /= m; }
+    out.x = x; out.y = y;
+    knob.style.transform = `translate(${x * half * 0.55}px, ${y * half * 0.55}px)`;
+  };
+  const end = (e) => { if (e.pointerId !== id) return; id = null; out.x = out.y = 0; knob.style.transform = ''; };
+  el.addEventListener('pointerdown', (e) => { unlockAudio(); if (id !== null) return; id = e.pointerId; el.setPointerCapture(id); set(e); e.preventDefault(); });
+  el.addEventListener('pointermove', (e) => { if (e.pointerId === id) set(e); });
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
 }
-canvas.addEventListener('pointerup', pointerEnd);
-canvas.addEventListener('pointercancel', pointerEnd);
-window.addEventListener('keydown', (e) => { keys[e.code] = true; if (e.code === 'KeyC') { player.crouch = !player.crouch; refresh(); } });
-window.addEventListener('keyup', (e) => { keys[e.code] = false; });
-window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+joystick($('move'), stick);
+joystick($('look'), lookStick);
+// A button that acts for as long as it is held.
+function holdButton(el, d) {
+  const up = () => { el.classList.remove('down'); if (wrench === d) setWrench(0); };
+  el.addEventListener('pointerdown', (e) => { el.setPointerCapture(e.pointerId); el.classList.add('down'); setWrench(d); e.preventDefault(); });
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+holdButton($('tightBtn'), 1);
+holdButton($('looseBtn'), -1);
+const doAction = () => { unlockAudio(); if (busy) return; const a = action(); if (a) a.run(); };
+$('actBtn').onclick = doAction;
+$('turnBtn').onclick = () => rotateHeld('turn');
+$('flipBtn').onclick = () => rotateHeld('flip');
+$('crouchBtn').onclick = () => { player.crouch = !player.crouch; refresh(); };
+$('menuBtn').onclick = () => modal('Bolt by Bolt', HELP, [
+  ['Start over', () => modal('Start over?', '<p>Every part goes back on the shelf, every bolt comes undone, and it is day one again.</p>', [['Cancel'], ['Start over', resetGame, 'danger']]), 'danger'],
+  ['Back to work', null, 'primary'],
+]);
+
+// Desktop: keys, and drag with the mouse to look.
+window.addEventListener('keydown', (e) => {
+  if (e.repeat || !$('modal').hidden) return;
+  keys[e.code] = true;
+  if (e.code === 'KeyE') doAction();
+  else if (e.code === 'KeyR') rotateHeld('turn');
+  else if (e.code === 'KeyF') rotateHeld('flip');
+  else if (e.code === 'KeyC') { player.crouch = !player.crouch; refresh(); }
+  else if (e.code === 'KeyZ') setWrench(1);
+  else if (e.code === 'KeyX') setWrench(-1);
+  else if (/^Digit[1-8]$/.test(e.code)) setTool(SIZES[+e.code.slice(5) - 1]);
+});
+window.addEventListener('keyup', (e) => {
+  keys[e.code] = false;
+  if ((e.code === 'KeyZ' && wrench === 1) || (e.code === 'KeyX' && wrench === -1)) setWrench(0);
+});
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; setWrench(0); });
+let drag = null;
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('pointerdown', (e) => { unlockAudio(); if (e.pointerType === 'mouse') { drag = e.pointerId; canvas.setPointerCapture(drag); } });
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerId !== drag) return;
+  player.yaw -= e.movementX * 0.0045;
+  player.pitch = clamp(player.pitch - e.movementY * 0.0045, -1.45, 1.45);
+});
+canvas.addEventListener('pointerup', (e) => { if (e.pointerId === drag) drag = null; });
 
 function movePlayer(dt) {
-  let mx = stick.x + (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
-  let my = stick.y + (keys.KeyS || keys.ArrowDown ? 1 : 0) - (keys.KeyW || keys.ArrowUp ? 1 : 0);
+  // look
+  const lx = lookStick.x + (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0), ly = lookStick.y + (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0);
+  player.yaw -= lx * Math.abs(lx) * 2.6 * dt;
+  player.pitch = clamp(player.pitch - ly * Math.abs(ly) * 1.8 * dt, -1.45, 1.45);
+  // walk
+  let mx = stick.x + (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0), my = stick.y + (keys.KeyS ? 1 : 0) - (keys.KeyW ? 1 : 0);
   const m = Math.hypot(mx, my);
   if (m > 1) { mx /= m; my /= m; }
-  if (m > 0.05 && !busy) {
-    const weak = stats.hunger <= 0 || stats.thirst <= 0 || stats.energy < 8;
-    const sp = (player.crouch ? 13 : 30) * (weak ? 0.55 : 1) * dt;
+  if (m > 0.08 && !busy) {
+    const sp = (player.crouch ? 13 : 30) * dt;
     const s = Math.sin(player.yaw), c = Math.cos(player.yaw);
     player.x += (mx * c + my * s) * sp;
     player.z += (-mx * s + my * c) * sp;
@@ -618,6 +597,7 @@ function movePlayer(dt) {
   player.eye += ((player.crouch ? EYE_CROUCH : EYE) - player.eye) * Math.min(1, dt * 10);
   camera.position.set(player.x, player.eye, player.z);
   camera.rotation.set(player.pitch, player.yaw, 0);
+  camera.updateMatrixWorld();
 }
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight, false);
@@ -627,138 +607,6 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 resize();
-
-/* ================= starting the engine ================= */
-function diagnose() {
-  const I = (id) => byId[id].installed;
-  const T = (id) => I(id) && byId[id].bolts.every((b) => b.tight >= 1);
-  const group = (n, k) => Array.from({ length: k }, (_, i) => `${n}${i + 1}`);
-  const caps = group('maincap', 5), pist = group('piston', 4), plugs = group('plug', 4);
-
-  if (!I('crank')) return { dead: 'The starter whirrs against nothing. There is no crankshaft in there.' };
-  if (!caps.every(T)) return { dead: 'CLUNK. The crankshaft shifted in the block. The main bearing caps have to be on, and tight.' };
-  if (!T('flywheel')) return { dead: 'The starter spins freely. It needs a flywheel, bolted up tight, to grab.' };
-
-  let no = null;
-  if (!pist.every(I)) no = 'It spins over far too easily. No compression — count your pistons.';
-  else if (!I('head')) no = 'The pistons pump air at the ceiling. A cylinder head would help.';
-  else if (!T('head')) no = 'Hissing between head and block. No compression — those head bolts are not all tight.';
-  else if (!['camshaft', 'camsprocket', 'cranksprocket', 'chain'].every(I)) no = 'It cranks, but the valves never move. Something is missing in the timing drive.';
-  else if (!T('camshaft') || !T('camsprocket')) no = 'Clattering from the top end. The valve gear is loose.';
-  else if (!plugs.every(T)) no = 'Cranks and cranks. Not every cylinder has a spark plug screwed in tight.';
-  else if (!T('distributor') || !I('leads')) no = 'Cranks and cranks. No spark at all — look at the ignition.';
-  else if (!T('intake') || !T('carb')) no = "Cranks and cranks. It isn't getting any fuel and air.";
-  if (no) return { noStart: no };
-
-  const fails = [];
-  if (!pist.every(T)) fails.push({ t: 3.5, bang: true, msg: 'BANG. A connecting rod let go. The rod cap nuts were not tight.' });
-  if (!T('oilpan')) fails.push({ t: 6, leak: true, msg: 'Oil all over the floor, then the engine seized. The oil pan has to be on with every bolt tight.' });
-  if (!I('oilfilter')) fails.push({ t: 5, leak: true, msg: 'Oil pumped straight out of the filter mount. The engine seized.' });
-  if (!T('timingcover')) fails.push({ t: 5, leak: true, msg: 'Oil sprays off the timing chain across the garage. The timing cover is not sealed.' });
-  if (!T('rockercover')) fails.push({ t: 6, msg: 'Oil mist pours from the top end. The rocker cover is not sealed.' });
-  if (!I('gasket')) fails.push({ t: 7, steam: true, msg: 'White smoke, then silence. There is no head gasket between block and head.' });
-  if (!T('waterpump') || !T('pulley') || !I('belt') || !T('alternator'))
-    fails.push({ t: 9, steam: true, msg: 'The temperature climbed until it boiled over. Check the belt drive: crank pulley, water pump, alternator, fan belt.' });
-  fails.sort((a, b) => a.t - b.t);
-  return { fail: fails[0] || null, loud: !T('exhaust') };
-}
-function startEngine() {
-  if (run || busy) return;
-  if (Math.hypot(player.x - ENGINE_POS.x, player.z - ENGINE_POS.z) > 45) return toast('Go over to the engine first');
-  if (held) drop();
-  endTurn(); selected = null;
-  const d = diagnose();
-  motor.start();
-  motor.set(0, { starter: true });
-  run = { phase: 'crank', t: 0, rpm: 0, target: 900, theta: 0, d, emit: 0 };
-  $('thr').value = 900;
-  refresh();
-}
-function stopEngine(msg, title) {
-  if (!run) return;
-  motor.stop();
-  run = null;
-  engineRoot.position.copy(ENGINE_POS);
-  refresh();
-  if (msg) modal(title || 'It died', `<p>${msg}</p>`, [['Back to the spanners', null, 'primary']]);
-}
-function tickEngine(dt) {
-  const d = run.d;
-  run.t += dt;
-  if (run.phase === 'crank') {
-    if (d.dead) { if (run.t > 1.2) { sfx.bang(); stopEngine(d.dead, "It won't turn over"); } return; }
-    run.rpm = 220;
-    if (run.t > 2.4) {
-      if (d.noStart) return stopEngine(d.noStart, "It won't start");
-      run.phase = 'run'; run.t = 0;
-      refresh();
-      if (d.loud) toast('It runs — deafeningly. The exhaust is not on properly.', 3500);
-    }
-  } else {
-    run.rpm += (run.target - run.rpm) * Math.min(1, dt * 3);
-    motor.set(run.rpm, { loud: d.loud });
-    $('rpm').textContent = Math.round(run.rpm / 10) * 10;
-    const f = d.fail;
-    if (f) {
-      if (f.leak) oil.scale.setScalar(Math.min(9, oil.scale.x + dt * 1.4));
-      if (run.t > f.t) { if (f.bang) { sfx.bang(); buzz(200); } return stopEngine(f.msg); }
-    } else if (!d.loud && !won && run.t > 6) {
-      won = true; save(); sfx.win();
-      const m = Math.floor(playTime / 60), s = Math.floor(playTime % 60);
-      modal('It runs.', `<p>${totalBolts} bolts, ${fitted.length} parts, and it idles like it left the factory.</p><p>Built in <b>${time.day} day${time.day > 1 ? 's' : ''}</b> (${m}m ${String(s).padStart(2, '0')}s of your life).</p><p>The throttle is on the right. Next job: getting it into the car.</p>`, [['Rev it', null, 'primary']]);
-    }
-    run.emit += dt * (4 + run.rpm / 300);
-    while (run.emit > 1) { run.emit -= 1; puff(f && f.steam && run.t > f.t * 0.5); }
-    const k = 0.006 + run.rpm / 600000;
-    engineRoot.position.set(ENGINE_POS.x + (Math.random() - 0.5) * k, ENGINE_POS.y + (Math.random() - 0.5) * k, ENGINE_POS.z + (Math.random() - 0.5) * k);
-  }
-  run.theta += (run.rpm / 60) * Math.PI * 2 * dt * 0.35;
-  setCrank(parts, run.theta);
-}
-
-/* smoke + oil */
-const fx = new THREE.Group();
-fx.position.copy(ENGINE_POS);
-scene.add(fx);
-const smokeTex = (() => {
-  const c = document.createElement('canvas'); c.width = c.height = 64;
-  const g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 2, 32, 32, 30);
-  gr.addColorStop(0, 'rgba(255,255,255,.7)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
-  return new THREE.CanvasTexture(c);
-})();
-const puffs = [];
-for (let i = 0; i < 40; i++) {
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, transparent: true, depthWrite: false, opacity: 0 }));
-  s.visible = false; s.raycast = () => {};
-  fx.add(s);
-  puffs.push({ s, life: 0, v: new THREE.Vector3() });
-}
-function puff(steam) {
-  const p = puffs.find((q) => q.life <= 0);
-  if (!p) return;
-  const ex = byId.exhaust.installed;
-  if (ex) p.s.position.set(...EXHAUST_TIP); else p.s.position.set(-1.5 + Math.floor(Math.random() * 4), 2.75, 1.0);
-  if (steam) p.s.position.set((Math.random() - 0.5) * 4, 2.45, (Math.random() < 0.5 ? -1 : 1) * 0.95);
-  p.v.set((Math.random() - 0.5) * 0.4, steam ? 1.4 : ex ? -0.6 : 0.5, steam ? 0 : ex ? 0.5 : 0.7);
-  p.s.material.color.set(steam ? 0xffffff : 0x8a8a8a);
-  p.life = p.max = 1.8; p.s.visible = true; p.s.scale.setScalar(0.3);
-}
-function tickPuffs(dt) {
-  for (const p of puffs) {
-    if (p.life <= 0) continue;
-    p.life -= dt;
-    p.s.position.addScaledVector(p.v, dt);
-    p.v.y += dt * 0.5;
-    p.s.scale.addScalar(dt * 1.3);
-    p.s.material.opacity = Math.max(0, p.life / p.max) * 0.5;
-    if (p.life <= 0) p.s.visible = false;
-  }
-}
-const oil = new THREE.Mesh(new THREE.CircleGeometry(1, 40), new THREE.MeshStandardMaterial({ color: 0x0b0906, roughness: 0.15, metalness: 0.4, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
-oil.rotation.x = -Math.PI / 2; oil.position.set(ENGINE_POS.x + 0.2, 0.03, ENGINE_POS.z + 0.2); oil.scale.setScalar(0.001);
-oil.raycast = () => {};
-scene.add(oil);
 
 /* ================= main loop ================= */
 let last = performance.now();
@@ -773,33 +621,18 @@ function watchFps(rawDt) {
   if (quality === 2) { renderer.shadowMap.enabled = false; world.spot.castShadow = false; }
   resize();
 }
-let hudT = 0;
+let hudT = 0, aimT = 0;
 function frame(now) {
   watchFps((now - last) / 1000);
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const paused = !$('modal').hidden || document.hidden;
 
-  if (!paused && !busy) {
-    if (!won) playTime += dt;
-    advance((dt / DAY_SECONDS) * 24);
-    tickStats(dt);
-  }
+  if (!paused && !busy) advance((dt / DAY_SECONDS) * 24);
   movePlayer(paused ? 0 : dt);
+  if ((aimT += dt) > 0.08 || wrench) { aimT = 0; aim(); }
+  tickWrench(dt);
 
-  if (turning) {
-    const b = turning;
-    const slow = stats.energy < 8 ? 0.5 : 1;
-    const t = clamp(b.tight + (dir * dt * slow) / 1.1, 0, 1);
-    setTight(b, t);
-    if (Math.abs(t - b.click) > 0.06) { b.click = t; sfx.ratchet(); }
-    b.head.getWorldPosition(spanner.position);
-    b.group.getWorldQuaternion(spanner.quaternion);
-    spanner.rotateY(1.0 + Math.sin(now * 0.012) * 0.45);
-    spanner.visible = true;
-    if (t >= 1) { sfx.tight(); buzz(25); endTurn(); }
-    else if (t <= 0) { sfx.loose(); buzz(10); endTurn(); }
-  }
   for (const p of parts) {
     if (p.anim === undefined) continue;
     p.anim = Math.min(1, p.anim + dt * 4);
@@ -808,9 +641,7 @@ function frame(now) {
     if (p.anim >= 1) delete p.anim;
   }
   if (held) updateHeld(dt);
-  if (run) tickEngine(dt);
-  tickPuffs(dt);
-  if ((hudT += dt) > 0.25) { hudT = 0; applyTime(); refreshStats(); }
+  if ((hudT += dt) > 0.5) { hudT = 0; applyTime(); }
 
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
@@ -821,15 +652,15 @@ buildTools();
 stockShelf();
 const hadSave = load();
 setCrank(parts, 0);
-applyTime(); refreshStats(); refresh();
-if (!hadSave) modal('Bolt by Bolt', `<p>Your garage. A coupe with no engine, an engine block on a stand, and ${fitted.length} parts on the shelf at the back. ${totalBolts} bolts to go.</p>${HELP}`, [['Get to work', null, 'primary']]);
-setInterval(() => { if (!run && !busy) save(); }, 15000);
+applyTime(); movePlayer(0); aim(); refresh();
+if (!hadSave) modal('Bolt by Bolt', `<p>Your garage. A fastback with no engine, an engine block on a stand, and ${fitted.length} parts on the shelf at the back. ${totalBolts} bolts to go.</p>${HELP}`, [['Get to work', null, 'primary']]);
+setInterval(() => { if (!busy) save(); }, 15000);
 requestAnimationFrame(frame);
 
 // Hooks for tests and for the curious.
 window.__game = {
-  parts, byId, player, stats, time, world, diagnose, install, uninstall, hold, drop, use, findBolt, camera, handleTap, tryFit, ORI, isOriented,
-  get state() { return { tool, dir, held: held && held.id, selected: selected && selected.id, run: run && run.phase, won, busy }; },
+  parts, byId, player, time, world, install, uninstall, hold, drop, findBolt, camera, ORI, isOriented, aim,
+  get state() { return { tool, held: held && held.id, target: target && { kind: target.kind, id: target.part ? target.part.id : target.what }, busy, done }; },
   buildAll(tight = true) {
     releaseHeld();
     for (const p of fitted) { if (!p.installed) install(p, true); p.bolts.forEach((b) => setTight(b, tight ? 1 : 0)); }
@@ -839,6 +670,7 @@ window.__game = {
     const dx = x - player.x, dy = y - (player.crouch ? EYE_CROUCH : EYE), dz = z - player.z;
     player.yaw = Math.atan2(-dx, -dz); player.pitch = Math.atan2(dy, Math.hypot(dx, dz));
   },
+  centreOf(obj) { return bb.setFromObject(obj).getCenter(new THREE.Vector3()).toArray(); },
   // Check every model: finite coordinates, no zero-area triangles, and — for solids — a closed,
   // outward-facing surface (every edge shared by an even number of triangles, positive volume).
   audit() {
@@ -881,6 +713,4 @@ window.__game = {
     });
     return { meshes, tris, bad };
   },
-  screenOf(obj) { bb.setFromObject(obj).getCenter(v3); return toScreen(v3); },
-  boltScreen(b) { b.head.getWorldPosition(v3); return toScreen(v3); },
 };
