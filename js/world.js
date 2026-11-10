@@ -1,7 +1,11 @@
 // The garage: a two-car space, half of it lived in. Units: 1 = 10 cm.
 // Floor plan origin is the back-left inside corner; +X is right, +Z is toward the garage door (front).
 import * as THREE from '../vendor/three.module.min.js';
-import { M, MAT, mesh, box, cyl, extrudeX } from './engine.js';
+import { MAT, TEX, box, cyl } from './geo.js';
+import { buildCar } from './car.js';
+
+const M = (color, metalness, roughness, bump = 0) =>
+  new THREE.MeshStandardMaterial({ color, metalness, roughness, ...(bump ? { bumpMap: TEX.fine, bumpScale: bump } : {}) });
 
 export const ROOM = { w: 60, d: 87, h: 28 };
 export const ENGINE_POS = new THREE.Vector3(10, 8.5, 21.5);
@@ -30,7 +34,7 @@ export function buildWorld(scene) {
   scene.add(g);
   const colliders = [], surfaces = [];
   const W = {
-    wall: M(0x9f9b8f, 0, 0.95), trim: M(0x6f6a60, 0, 0.9), wood: M(0x80603c, 0, 0.8), board: M(0x9a7a50, 0, 0.85),
+    wall: M(0x9f9b8f, 0, 0.95, 1.2), trim: M(0x6f6a60, 0, 0.9), wood: M(0x80603c, 0, 0.8, 0.8), board: M(0x9a7a50, 0, 0.85, 0.8),
     white: M(0xe9e6df, 0, 0.6), tile: M(0xcfd8dc, 0.1, 0.35), fabric: M(0x3d5a80, 0, 0.95), pillow: M(0xf2efe6, 0, 0.9),
     lamp: new THREE.MeshBasicMaterial({ color: 0xfff3d0 }), door: M(0x5b4632, 0, 0.7), garageDoor: M(0xd9d6cf, 0.3, 0.6),
   };
@@ -50,12 +54,14 @@ export function buildWorld(scene) {
   const floor = add(new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial({ map: concrete, roughness: 0.95 })));
   floor.rotation.x = -Math.PI / 2; floor.position.set(w / 2, 0, d / 2); floor.receiveShadow = true;
   surfaces.push(floor);
+  // laminate and tiles are thin slabs laid on the concrete, so no two floor surfaces share a plane
   const planks = canvasTex((c) => { speckle(c, '#8a6a46', 1200); c.fillStyle = 'rgba(0,0,0,.3)'; for (let i = 0; i < 8; i++) c.fillRect(i * 32, 0, 1.5, 256); }, 3, 6);
-  const living = add(new THREE.Mesh(new THREE.PlaneGeometry(27, 64.5), new THREE.MeshStandardMaterial({ map: planks, roughness: 0.8 })));
-  living.rotation.x = -Math.PI / 2; living.position.set(46.5, 0.04, 32.25); living.receiveShadow = true;
   const tiles = canvasTex((c) => { c.fillStyle = '#dfe6e8'; c.fillRect(0, 0, 256, 256); c.strokeStyle = '#9fb0b6'; c.lineWidth = 4; for (let i = 0; i <= 4; i++) { c.strokeRect(i * 64, 0, 0, 256); c.strokeRect(0, i * 64, 256, 0); } }, 3, 6);
-  const bath = add(new THREE.Mesh(new THREE.PlaneGeometry(12, 23), new THREE.MeshStandardMaterial({ map: tiles, roughness: 0.4 })));
-  bath.rotation.x = -Math.PI / 2; bath.position.set(54, 0.06, 53); bath.receiveShadow = true;
+  const lam = new THREE.MeshStandardMaterial({ map: planks, roughness: 0.8 }), til = new THREE.MeshStandardMaterial({ map: tiles, roughness: 0.4 });
+  for (const [x0, z0, x1, z1, m] of [[33, 0, w, 40.5, lam], [33, 40.5, 47, 64.5, lam], [48, 41.5, w, 64.5, til]]) {
+    const slab = add(box(x1 - x0, 0.15, z1 - z0, m, (x0 + x1) / 2, 0.075, (z0 + z1) / 2));
+    slab.receiveShadow = true; surfaces.push(slab);
+  }
   const ceil = add(new THREE.Mesh(new THREE.PlaneGeometry(w + 3, d + 3), M(0x8f8c84, 0, 1)));
   ceil.rotation.x = Math.PI / 2; ceil.position.set(w / 2, h, d / 2);
 
@@ -84,8 +90,9 @@ export function buildWorld(scene) {
   leaf.userData.use = 'door';
 
   /* parts shelf along the back wall */
-  for (const y of SHELF.levels) solid(1, 1, 31.2, 7, y - 0.5, y, W.board, { collide: false, surface: true });
-  for (const x of [1.3, 11, 21, 30.9]) for (const z of [1.3, 6.7]) add(box(0.6, 19, 0.6, MAT.dark, x, 9.5, z));
+  for (const y of SHELF.levels) solid(1, 1, 31.2, 7, y - 0.25, y, W.board, { collide: false, surface: true });
+  for (const x of [1.25, 11, 21, 30.95]) for (const z of [1.25, 6.75]) add(box(0.5, 19, 0.5, MAT.dark, x, 9.5, z));
+  for (const y of SHELF.levels) for (const z of [1.25, 6.75]) add(box(30.2, 0.4, 0.3, MAT.dark, 16.1, y - 0.45, z));
   colliders.push({ x0: 0, x1: 32, z0: 0, z1: 7.4 });
 
   /* bed */
@@ -95,15 +102,15 @@ export function buildWorld(scene) {
   solid(54.8, 4.6, 58.8, 11.9, 5.4, 6.6, W.pillow, { collide: false, use: 'bed' });
 
   /* kitchen */
-  solid(53, 14.6, 59.8, 19.3, 0, 18, W.white, { use: 'food' });                          // fridge
-  add(box(0.3, 5, 0.4, MAT.steel, 52.8, 11, 15.4));
-  solid(52, 19.6, 59.8, 40.2, 0, 8.6, W.wood, {});
-  solid(51.7, 19.5, 59.8, 40.3, 8.6, 9.1, MAT.dark, { collide: false, surface: true });
-  solid(53.4, 23, 58.4, 28.5, 8.9, 9.25, MAT.steel, { collide: false, use: 'sink' });
-  const tap = add(cyl(0.2, 2.6, MAT.steel, 'y', 59, 10.4, 25.7, 8)); tap.userData.use = 'sink';
-  const spout = add(cyl(0.18, 2.2, MAT.steel, 'x', 58, 11.6, 25.7, 8)); spout.userData.use = 'sink';
-  solid(53.2, 31.5, 58.6, 37.5, 9.1, 9.3, MAT.black, { collide: false, use: 'food' });   // hob
-  const pot = add(cyl(1.5, 1.6, MAT.steel, 'y', 55.9, 10.1, 34.5, 18)); pot.userData.use = 'food';
+  solid(53.4, 14.0, 59.8, 19.4, 0, 18, W.white, { use: 'food' });                          // fridge
+  add(box(0.3, 5, 0.4, MAT.steel, 53.2, 11, 14.8));
+  solid(54, 19.6, 59.8, 40.2, 0, 8.6, W.wood, {});
+  solid(53.7, 19.5, 59.8, 40.3, 8.6, 9.0, MAT.dark, { collide: false, surface: true });
+  solid(54.6, 23, 58.6, 28.5, 9.0, 9.12, MAT.steel, { collide: false, use: 'sink' });
+  const tap = add(cyl(0.15, 2.6, MAT.steel, 'y', 59.2, 10.3, 25.7, 8)); tap.userData.use = 'sink';
+  const spout = add(cyl(0.13, 2.0, MAT.steel, 'x', 58.2, 11.5, 25.7, 8)); spout.userData.use = 'sink';
+  solid(54.4, 31.5, 59.2, 37.5, 9.0, 9.1, MAT.black, { collide: false, use: 'food' });   // hob
+  const pot = add(cyl(1.2, 1.4, MAT.steel, 'y', 56.8, 9.8, 34.5, 18)); pot.userData.use = 'food';
 
   /* bathroom */
   solid(55.2, 59.5, 58.8, 63.8, 0, 3.8, W.white, { use: 'toilet' });
@@ -146,7 +153,7 @@ export function buildWorld(scene) {
   scene.add(out);
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600), new THREE.MeshLambertMaterial({ color: 0x4f7a3a }));
   ground.rotation.x = -Math.PI / 2; ground.position.set(30, -0.3, 87);
-  const drive = new THREE.Mesh(new THREE.PlaneGeometry(56, 260), new THREE.MeshLambertMaterial({ color: 0x8a867d }));
+  const drive = new THREE.Mesh(new THREE.PlaneGeometry(56, 260), new THREE.MeshLambertMaterial({ color: 0x8a867d, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }));
   drive.rotation.x = -Math.PI / 2; drive.position.set(30, -0.2, 218);
   out.add(ground, drive);
   const leafMat = new THREE.MeshLambertMaterial({ color: 0x2f5a2c }), trunkMat = new THREE.MeshLambertMaterial({ color: 0x4a3524 });
@@ -162,8 +169,8 @@ export function buildWorld(scene) {
   }
   const sun = new THREE.Mesh(new THREE.SphereGeometry(26, 16, 12), new THREE.MeshBasicMaterial({ color: 0xfff2c0, fog: false }));
   out.add(sun);
-  const patch = add(new THREE.Mesh(new THREE.PlaneGeometry(50, 30), new THREE.MeshBasicMaterial({ color: 0xffe2a8, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false })));
-  patch.rotation.x = -Math.PI / 2; patch.position.set(30, 0.08, 74);
+  const patch = add(new THREE.Mesh(new THREE.PlaneGeometry(31, 24), new THREE.MeshBasicMaterial({ color: 0xffe2a8, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })));
+  patch.rotation.x = -Math.PI / 2; patch.position.set(16.5, 0.05, 74);
   patch.raycast = () => {};
 
   const car = buildCar();
@@ -172,64 +179,4 @@ export function buildWorld(scene) {
   colliders.push({ x0: 17.3 - 9.4, x1: 17.3 + 9.4, z0: 59.5 - 22.6, z1: 59.5 + 22.7 });
 
   return { group: g, colliders, surfaces, sun, patch, lamps, spot };
-}
-
-// A 2010-ish sport coupe shell: rolling, with gearbox, one seat, wheel, dash and shifter. No doors, no engine.
-function buildCar() {
-  const car = new THREE.Group();
-  car.userData.use = 'car';
-  const body = M(0x1f4e79, 0.55, 0.36), primer = M(0x8b8f92, 0.1, 0.8), trim = M(0x1b1d20, 0.2, 0.7);
-  const glass = new THREE.MeshStandardMaterial({ color: 0x9fc4d8, metalness: 0.2, roughness: 0.08, transparent: true, opacity: 0.28, depthWrite: false });
-  const add = (...m) => { for (const o of m) { o.castShadow = false; car.add(o); } };
-  const arch = (zc) => {
-    const pts = [];
-    for (let i = 0; i <= 14; i++) {
-      const a = (-16.4 + (212.8 * i) / 14) * (Math.PI / 180);
-      pts.push([zc + 3.9 * Math.cos(a), 3.3 + 3.9 * Math.sin(a)]);
-    }
-    return pts;
-  };
-  const outline = [
-    [-22, 2.2], [-22.3, 4.5], [-21.6, 6.6], [-16, 8.0], [-9.5, 8.6], [-2, 12.6], [4, 12.9], [9, 11.9], [13, 10.8], [19, 9.7], [22, 9.3], [22.4, 5], [21.9, 2.2],
-    ...arch(13), ...arch(-13.5),
-  ];
-  const doorHole = [[-7.6, 3.4], [5.6, 3.4], [6.4, 7.5], [5.4, 11.9], [-1.6, 11.7], [-7.6, 8.4]];
-  const quarter = [[7.6, 8.9], [7.3, 11.4], [11.6, 10.5], [11.4, 8.9]];
-  add(extrudeX(outline, [doorHole, quarter], -9, 0.6, body), extrudeX(outline, [doorHole, quarter], 8.4, 0.6, body));
-  const slab = (z1, y1, z2, y2, t, mat, wd = 16.8) => {
-    const m = box(wd, t, Math.hypot(z2 - z1, y2 - y1), mat, 0, (y1 + y2) / 2, (z1 + z2) / 2);
-    m.rotation.x = Math.atan2(-(y2 - y1), z2 - z1);
-    return m;
-  };
-  add(
-    slab(-9.3, 8.5, -2.2, 12.4, 0.15, glass), slab(-2.2, 12.45, 4, 12.75, 0.5, body), slab(4, 12.75, 7.2, 12.1, 0.5, body),
-    slab(7.2, 12.0, 13, 10.65, 0.15, glass), slab(13, 10.6, 19, 9.5, 0.45, body), slab(19, 9.5, 22, 9.1, 0.45, body),
-    box(18, 6.6, 1.2, body, 0, 5.9, 21.7), box(18, 3.8, 1.5, primer, 0, 4.2, -21.5), box(16.8, 0.6, 0.6, trim, 0, 6.9, -20.3),
-    box(16.8, 0.5, 29.6, trim, 0, 2.45, 5.7), box(16.8, 6.2, 0.4, primer, 0, 5.5, -9.2), box(16.8, 6.5, 0.4, primer, 0, 5.9, 8.3),
-    box(2.6, 1.8, 17, trim, 0, 3.5, -0.6),
-  );
-  for (const s of [-1, 1]) {
-    add(
-      box(2.6, 1.0, 10.8, body, s * 7.1, 7.5, -14.7), box(0.4, 5, 10.8, primer, s * 5.9, 5, -14.7), box(0.8, 0.8, 12, trim, s * 4.4, 3, -15),
-      box(2.8, 5.5, 9, primer, s * 7, 5.2, 13), box(3.4, 1.3, 0.3, MAT.ceramic, s * 6.2, 6.0, -22.3),
-      box(4.2, 1.2, 0.3, new THREE.MeshStandardMaterial({ color: 0x7a0f0f, emissive: 0x3a0505, roughness: 0.4 }), s * 6.2, 7.6, 22.35),
-    );
-    for (const zc of [-13.5, 13]) add(cyl(3.3, 2.2, MAT.rubber, 'x', s * 7.6, 3.3, zc, 28), cyl(2.1, 2.3, MAT.alu, 'x', s * 7.6, 3.3, zc, 20), cyl(0.7, 2.45, MAT.dark, 'x', s * 7.6, 3.3, zc, 10));
-  }
-  // gearbox poking through the firewall, waiting for an engine
-  add(cyl(2.0, 1.8, MAT.alu, 'z', 0, 4.2, -10.2, 20, 1.3), cyl(0.22, 1.2, MAT.steel, 'z', 0, 4.2, -11.6, 10), box(2.2, 2.2, 7, MAT.alu, 0, 3.7, -6));
-  // cabin
-  const wheel = new THREE.Mesh(new THREE.TorusGeometry(1.7, 0.22, 10, 28), trim);
-  wheel.position.set(-4.2, 8.9, -4.3); wheel.rotation.x = -0.35;
-  const column = cyl(0.25, 3.2, trim, 'z', -4.2, 8.5, -5.8, 8); column.rotation.x = -0.35;
-  const back = box(4.6, 6.6, 1.3, MAT.black, -4.2, 7.3, 4.2); back.rotation.x = 0.2;
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 10), MAT.ceramic); knob.position.set(0, 6.6, -1.5);
-  add(
-    box(16.6, 2.2, 2.6, trim, 0, 7.9, -7.7), box(3.6, 1.3, 1.2, trim, -4.2, 9.4, -7.4),
-    cyl(0.6, 0.1, MAT.ceramic, 'z', -5, 9.4, -6.75, 16), cyl(0.6, 0.1, MAT.ceramic, 'z', -3.4, 9.4, -6.75, 16),
-    wheel, column, box(0.4, 0.3, 3.2, trim, -4.2, 8.9, -4.3), box(3.2, 0.3, 0.4, trim, -4.2, 8.9, -4.3),
-    box(4.6, 1.4, 4.8, MAT.black, -4.2, 3.9, 1.3), back, box(2.4, 1.8, 1, MAT.black, -4.2, 11.1, 4.95),
-    cyl(0.12, 2.4, MAT.steel, 'y', 0, 5.4, -1.5, 8), knob, cyl(0.7, 0.8, trim, 'y', 0, 4.6, -1.5, 10, 0.2),
-  );
-  return car;
 }

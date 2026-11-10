@@ -1,11 +1,11 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { RoomEnvironment } from '../vendor/RoomEnvironment.js';
-import { buildEngine, buildStand, buildSpanner, setTight, setCrank } from './engine.js';
+import { buildEngine, buildStand, buildSpanner, setTight, setCrank, EXHAUST_TIP } from './engine.js';
 import { buildWorld, ROOM, ENGINE_POS, SHELF } from './world.js';
 import { sfx, motor, unlockAudio } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
-const SAVE_KEY = 'bolt-by-bolt-save-v3';
+const SAVE_KEY = 'bolt-by-bolt-save-v4';
 const SIZES = [8, 10, 12, 13, 14, 16, 17, 19];
 const DAY_SECONDS = 900;                 // one full day
 const REACH = 24, BOLT_REACH = 17;       // 2.4 m to grab, 1.7 m to wrench
@@ -24,7 +24,7 @@ renderer.toneMappingExposure = 1.0;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x86bff0);
 scene.fog = new THREE.Fog(0x86bff0, 200, 760);
-const camera = new THREE.PerspectiveCamera(68, 1, 0.3, 1200);
+const camera = new THREE.PerspectiveCamera(68, 1, 0.4, 950);
 camera.rotation.order = 'YXZ';
 
 const pmrem = new THREE.PMREMGenerator(renderer);
@@ -353,7 +353,7 @@ function applyTime() {
   world.sun.position.set(30 - Math.cos(az) * 620, sunUp * 520, 87 + 560);
   world.sun.visible = sunUp > -0.05;
   world.patch.material.opacity = Math.max(0, sunUp) * 0.22;
-  world.patch.position.x = 30 + Math.cos(az) * 12;
+  world.patch.position.x = 16.5 + Math.cos(az) * 6;
   const hh = Math.floor(h), mm = Math.floor((h - hh) * 60);
   $('cTime').textContent = `Day ${time.day} · ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
@@ -633,7 +633,7 @@ function diagnose() {
   const I = (id) => byId[id].installed;
   const T = (id) => I(id) && byId[id].bolts.every((b) => b.tight >= 1);
   const group = (n, k) => Array.from({ length: k }, (_, i) => `${n}${i + 1}`);
-  const caps = group('maincap', 3), pist = group('piston', 4), plugs = group('plug', 4);
+  const caps = group('maincap', 5), pist = group('piston', 4), plugs = group('plug', 4);
 
   if (!I('crank')) return { dead: 'The starter whirrs against nothing. There is no crankshaft in there.' };
   if (!caps.every(T)) return { dead: 'CLUNK. The crankshaft shifted in the block. The main bearing caps have to be on, and tight.' };
@@ -738,9 +738,9 @@ function puff(steam) {
   const p = puffs.find((q) => q.life <= 0);
   if (!p) return;
   const ex = byId.exhaust.installed;
-  if (ex) p.s.position.set(0.9, -1.55, 1.72); else p.s.position.set(-1.5 + Math.floor(Math.random() * 4), 2.75, 1.0);
+  if (ex) p.s.position.set(...EXHAUST_TIP); else p.s.position.set(-1.5 + Math.floor(Math.random() * 4), 2.75, 1.0);
   if (steam) p.s.position.set((Math.random() - 0.5) * 4, 2.45, (Math.random() < 0.5 ? -1 : 1) * 0.95);
-  p.v.set(ex && !steam ? 0.9 : (Math.random() - 0.5) * 0.4, steam ? 1.4 : 0.5, steam ? 0 : 0.7);
+  p.v.set((Math.random() - 0.5) * 0.4, steam ? 1.4 : ex ? -0.6 : 0.5, steam ? 0 : ex ? 0.5 : 0.7);
   p.s.material.color.set(steam ? 0xffffff : 0x8a8a8a);
   p.life = p.max = 1.8; p.s.visible = true; p.s.scale.setScalar(0.3);
 }
@@ -755,8 +755,8 @@ function tickPuffs(dt) {
     if (p.life <= 0) p.s.visible = false;
   }
 }
-const oil = new THREE.Mesh(new THREE.CircleGeometry(1, 40), new THREE.MeshStandardMaterial({ color: 0x0b0906, roughness: 0.15, metalness: 0.4 }));
-oil.rotation.x = -Math.PI / 2; oil.position.set(ENGINE_POS.x + 0.2, 0.1, ENGINE_POS.z + 0.2); oil.scale.setScalar(0.001);
+const oil = new THREE.Mesh(new THREE.CircleGeometry(1, 40), new THREE.MeshStandardMaterial({ color: 0x0b0906, roughness: 0.15, metalness: 0.4, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+oil.rotation.x = -Math.PI / 2; oil.position.set(ENGINE_POS.x + 0.2, 0.03, ENGINE_POS.z + 0.2); oil.scale.setScalar(0.001);
 oil.raycast = () => {};
 scene.add(oil);
 
@@ -838,6 +838,48 @@ window.__game = {
   lookAt(x, y, z) {
     const dx = x - player.x, dy = y - (player.crouch ? EYE_CROUCH : EYE), dz = z - player.z;
     player.yaw = Math.atan2(-dx, -dz); player.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+  },
+  // Check every model: finite coordinates, no zero-area triangles, and — for solids — a closed,
+  // outward-facing surface (every edge shared by an even number of triangles, positive volume).
+  audit() {
+    const bad = [], a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+    let meshes = 0, tris = 0;
+    const nameOf = (o) => { for (let q = o; q; q = q.parent) { if (q.userData.partId) return q.userData.partId; if (q.userData.use) return q.userData.use; } return 'world'; };
+    const roots = [scene, ...parts.map((p) => p.group)];
+    const seen = new Set();
+    for (const root of roots) root.traverse((o) => {
+      if (!o.isMesh || seen.has(o.geometry)) return;
+      seen.add(o.geometry); meshes++;
+      const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry, p = g.attributes.position, edges = new Map();
+      let vol = 0, degenerate = 0, nan = 0;
+      const key = (v) => `${Math.round(v.x * 2e3)},${Math.round(v.y * 2e3)},${Math.round(v.z * 2e3)}`;
+      for (let i = 0; i < p.count; i += 3) {
+        a.fromBufferAttribute(p, i); b.fromBufferAttribute(p, i + 1); c.fromBufferAttribute(p, i + 2);
+        if (![a, b, c].every((v) => Number.isFinite(v.x + v.y + v.z))) { nan++; continue; }
+        tris++;
+        if (v1.subVectors(b, a).cross(v2.subVectors(c, a)).lengthSq() < 1e-16) degenerate++;
+        vol += a.dot(v1.crossVectors(b, c)) / 6;
+        if (o.userData.solid) {
+          const k = [key(a), key(b), key(c)];
+          for (let e = 0; e < 3; e++) {                       // per edge: how often it runs each way
+            const p0 = k[e], p1 = k[(e + 1) % 3], fwd = p0 < p1, rec = edges.get(fwd ? p0 + '|' + p1 : p1 + '|' + p0) || [0, 0];
+            rec[fwd ? 0 : 1]++;
+            edges.set(fwd ? p0 + '|' + p1 : p1 + '|' + p0, rec);
+          }
+        }
+      }
+      let open = 0, flipped = 0;
+      for (const [f, r] of edges.values()) { if ((f + r) % 2) open++; else if (f !== r) flipped++; }
+      const why = [];
+      if (nan) why.push(`${nan} non-finite triangles`);
+      if (degenerate) why.push(`${degenerate} zero-area triangles`);
+      if (!g.attributes.normal) why.push('no normals');
+      if (o.userData.solid && open) why.push(`${open} open edges`);
+      if (o.userData.solid && flipped) why.push(`${flipped} edges with faces wound the wrong way`);
+      if (o.userData.solid && vol <= 0) why.push('inside out');
+      if (why.length) bad.push(`${nameOf(o)}: ${why.join(', ')}`);
+    });
+    return { meshes, tris, bad };
   },
   screenOf(obj) { bb.setFromObject(obj).getCenter(v3); return toScreen(v3); },
   boltScreen(b) { b.head.getWorldPosition(v3); return toScreen(v3); },

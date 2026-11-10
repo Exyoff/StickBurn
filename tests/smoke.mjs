@@ -16,8 +16,13 @@ await page.waitForFunction(() => window.__game);
 await page.click('#mActs button');
 const settle = () => page.waitForTimeout(1200);
 
+// every model is sound: finite, no zero-area triangles, solids closed and facing outwards
+const audit = await page.evaluate(() => __game.audit());
+assert.deepEqual(audit.bad, [], 'mesh audit');
+assert.ok(audit.meshes > 200 && audit.tris > 50000);
+
 // every part starts loose on the shelf at the back of the garage
-assert.equal(await page.evaluate(() => __game.parts.filter((p) => p.state === 'loose').length), 32);
+assert.equal(await page.evaluate(() => __game.parts.filter((p) => p.state === 'loose').length), 34);
 assert.ok(await page.evaluate(() => __game.parts.filter((p) => p.state === 'loose').every((p) => p.loose[2] < 12)));
 
 // walls stop the player: hold "forward" into the back wall
@@ -53,7 +58,13 @@ assert.equal(await page.evaluate(() => __game.byId.crank.installed), true);
 // main cap bolt from underneath: wrong spanner, then the right one
 // a bolted part can be picked up and fitted too
 await page.evaluate(() => { const g = __game; g.hold(g.byId.maincap1); g.byId.maincap1.rot.identity(); });
-await page.evaluate(() => { const g = __game; g.install(g.byId.maincap1); Object.assign(g.player, { x: 7.9, z: 25.2, crouch: true }); g.lookAt(7.85, 8.1, 21.8); });
+await page.evaluate(() => {
+  const g = __game, b = g.byId.maincap1.bolts[1];
+  g.install(g.byId.maincap1);
+  const w = b.head.getWorldPosition(g.camera.position.clone());
+  Object.assign(g.player, { x: w.x, z: w.z + 3.4, crouch: true });
+  g.lookAt(w.x, w.y, w.z);
+});
 await settle();
 pt = await page.evaluate(() => __game.boltScreen(__game.byId.maincap1.bolts[1]));
 await page.click('#tools button[data-tool="10"]');
