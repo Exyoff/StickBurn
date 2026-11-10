@@ -10,7 +10,7 @@ Nobody tells you which size fits.
 ## Play
 
 - **Move** with your left thumb, **look** by dragging anywhere else, **tap** things to use them. Keyboard: WASD, drag to look, C to crouch.
-- Tap a part on the shelf to pick it up, carry it to the engine, tap its green outline. Red means something is missing or in the way. **Drop** puts it down where you are looking.
+- Tap a part on the shelf to grab it. Parts lie any way up: **Turn** and **Flip** it until it faces the way it fits, hold it up to its place on the engine, and **drop it in**. Up close an outline shows green (lines up), amber (wrong way round) or red (something missing or in the way). **Put down** rests it where you are looking.
 - Pick a spanner size and **press and hold** a bolt to turn it. **↻ / ↺** flips the ratchet. **Crouch** to reach the underside.
 - Tap a fitted part to take it off again once its bolts are undone.
 - **Energy, hunger, thirst**: eat at the fridge or stove, drink from a tap, sleep in the bed. At zero energy you collapse and lose hours.

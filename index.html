@@ -62,7 +62,7 @@
     width:min(360px, calc(100% - 128px)); margin-left:-52px; background:var(--panel); border:1px solid var(--line); border-radius:12px;
     padding:7px 7px 7px 11px; display:flex; align-items:center; gap:8px; }
   #strip .txt { flex:1; min-width:0; }
-  #strip .txt b { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #strip .txt b { display:block; }
   #strip .txt span { font-size:12px; color:var(--dim); display:block; }
   #strip button { min-height:40px; padding:0 11px; }
 
@@ -124,6 +124,8 @@
 </div>
 
 <div id="side">
+  <button id="turnBtn" hidden>⟳ Turn</button>
+  <button id="flipBtn" hidden>⤵ Flip</button>
   <button id="dirBtn">↻ Tighten</button>
   <button id="crouchBtn">Crouch</button>
 </div>

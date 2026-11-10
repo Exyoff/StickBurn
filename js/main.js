@@ -5,7 +5,7 @@ import { buildWorld, ROOM, ENGINE_POS, SHELF } from './world.js';
 import { sfx, motor, unlockAudio } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
-const SAVE_KEY = 'bolt-by-bolt-save-v2';
+const SAVE_KEY = 'bolt-by-bolt-save-v3';
 const SIZES = [8, 10, 12, 13, 14, 16, 17, 19];
 const DAY_SECONDS = 900;                 // one full day
 const REACH = 24, BOLT_REACH = 17;       // 2.4 m to grab, 1.7 m to wrench
@@ -54,8 +54,9 @@ engineRoot.add(byId.block.group);
 const spanner = buildSpanner();
 spanner.visible = false;
 scene.add(spanner);
-const ghostOk = new THREE.MeshBasicMaterial({ color: 0x4cff7a, transparent: true, opacity: 0.4, depthWrite: false });
-const ghostNo = new THREE.MeshBasicMaterial({ color: 0xff5a45, transparent: true, opacity: 0.4, depthWrite: false });
+const ghostMat = new THREE.MeshBasicMaterial({ color: 0x4cff7a, transparent: true, opacity: 0.35, depthWrite: false });
+const heldRoot = new THREE.Group();
+scene.add(heldRoot);
 
 /* ================= game state ================= */
 const player = { x: 39, z: 80, yaw: 0.6, pitch: -0.12, crouch: false, eye: EYE };
@@ -68,32 +69,59 @@ const known = {};
 let run = null;
 
 /* ---------- parts lying around ---------- */
-const qY = new THREE.Quaternion(), Y = new THREE.Vector3(0, 1, 0), bb = new THREE.Box3();
+const bb = new THREE.Box3();
 const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), v3 = new THREE.Vector3();
-function pose(p, r) {
-  qY.setFromAxisAngle(Y, r);
-  p.group.quaternion.copy(qY).multiply(p.baseQuat);
-  p.group.position.copy(p.base).applyQuaternion(qY);
+const AX = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+const quarter = (axis, n = 1) => new THREE.Quaternion().setFromAxisAngle(AX[axis], (n * Math.PI) / 2);
+// The 24 ways a part can sit square to the world.
+const ORI = [new THREE.Quaternion()];
+for (let i = 0; i < ORI.length; i++) for (const a of ['x', 'y']) {
+  const q = quarter(a).multiply(ORI[i]);
+  if (!ORI.some((o) => o.angleTo(q) < 0.01)) ORI.push(q);
+}
+// Parts that look the same after a turn about one axis accept those turns too ("y2" = half turn about Y).
+const SYM = { piston: 'y2', maincap: 'y2', gasket: 'y2', head: 'y2', oilpan: 'y2', cranksprocket: 'x4', camsprocket: 'x4', pulley: 'x4', flywheel: 'x4', oilfilter: 'z4' };
+for (const p of fitted) {
+  p.pivot = bb.setFromObject(p.group).getCenter(new THREE.Vector3());   // centre of the part, in engine coordinates
+  p.holdDist = clamp(bb.getSize(v1).length() * 0.55 + 4.5, 5.5, 9);
+  p.rot = new THREE.Quaternion();        // how the part is turned relative to how it fits
+  p.rotShow = new THREE.Quaternion();
+  p.syms = [new THREE.Quaternion()];
+  const s = SYM[p.id.replace(/\d+$/, '')];
+  if (s) for (let n = 1; n < +s[1]; n++) p.syms.push(quarter(s[0], (n * 4) / +s[1]));
+}
+const isOriented = (p, q = p.rot) => p.syms.some((o) => o.angleTo(q) < 0.02);
+
+function pose(p, q) {
+  p.group.quaternion.copy(q).multiply(p.baseQuat);
+  p.group.position.copy(p.base).applyQuaternion(q);
   if (p.group.parent !== looseRoot) looseRoot.add(p.group);
   return bb.setFromObject(p.group);
 }
-// Rest a part with the bottom-centre of its bounding box at (x, y, z).
-function placeLoose(p, x, y, z, r) {
-  const b = pose(p, r);
+// Rest a part, turned by q, with the bottom-centre of its bounding box at (x, y, z).
+function placeLoose(p, x, y, z, q) {
+  const b = pose(p, q);
   b.getCenter(v1);
   p.group.position.x += x - v1.x; p.group.position.y += y - b.min.y; p.group.position.z += z - v1.z;
-  p.loose = [x, y, z, r];
+  p.rot.copy(q);
+  p.loose = [x, y, z, q.x, q.y, q.z, q.w];
   p.state = 'loose'; p.installed = false;
 }
+const placeSaved = (p, a) => placeLoose(p, a[0], a[1], a[2], new THREE.Quaternion(a[3], a[4], a[5], a[6]));
+// Parts start on the shelf lying any old way up (the same way every new game).
 function stockShelf() {
-  let row = 0, cur = SHELF.x0;
+  let row = 0, cur = SHELF.x0, seed = 7;
+  const rnd = () => (seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff) / 0x7fffffff;
   for (const p of fitted) {
-    let b = pose(p, 0).getSize(v2).clone();
-    const r = b.x < 0.6 && b.z > 0.8 ? Math.PI / 2 : 0;      // turn thin plates to face the room
-    if (r) b = pose(p, r).getSize(v2).clone();
+    let q = ORI[0];
+    for (let k = 0; k < 16; k++) {
+      const c = ORI[1 + Math.floor(rnd() * 23)], s = pose(p, c).getSize(v2);
+      if (s.y <= 4.5 && s.z <= 5.4 && s.x <= 9 && !isOriented(p, c)) { q = c; break; }
+    }
+    const b = pose(p, q).getSize(v2).clone();
     if (cur + b.x > SHELF.x1 && row < SHELF.levels.length) { row++; cur = SHELF.x0; }
     const onFloor = row >= SHELF.levels.length;
-    placeLoose(p, cur + b.x / 2, onFloor ? 0 : SHELF.levels[row], onFloor ? 11 : SHELF.z, r);
+    placeLoose(p, cur + b.x / 2, onFloor ? 0 : SHELF.levels[row], onFloor ? 11 : SHELF.z, q);
     p.home = p.loose.slice();
     cur += b.x + 0.95;
   }
@@ -117,25 +145,74 @@ const reasonRemove = (p) => {
   return null;
 };
 
-function setGhost(p, on) {
-  const mat = reasonInstall(p) ? ghostNo : ghostOk;
-  p.group.traverse((o) => {
-    if (!o.isMesh) return;
-    if (on) { o.userData.mat ??= o.material; o.material = mat; o.castShadow = false; }
-    else if (o.userData.mat) { o.material = o.userData.mat; delete o.userData.mat; o.castShadow = true; }
-  });
-}
 function toEngine(p) {
   engineRoot.add(p.group);
   p.group.position.copy(p.base);
   p.group.quaternion.copy(p.baseQuat);
 }
-// Carry a part: it shows as an outline where it belongs on the engine.
+/* ---------- carrying a part ---------- */
+// A see-through copy of a part's shape (not Object3D.clone: bolts carry back-references in userData).
+function outlineOf(o) {
+  const c = o.isMesh ? new THREE.Mesh(o.geometry, ghostMat) : new THREE.Group();
+  c.position.copy(o.position); c.quaternion.copy(o.quaternion); c.scale.copy(o.scale);
+  c.raycast = () => {};
+  for (const k of o.children) c.add(outlineOf(k));
+  return c;
+}
+let ghost = null, inRange = false, fitNote = '';
+// Pick a part up: it hangs in front of you, turned however it was lying.
 function hold(p) {
   held = p; selected = null; p.state = 'held'; p.installed = false;
-  toEngine(p);
-  setGhost(p, true);
+  heldRoot.add(p.group);
+  p.rotShow.copy(p.rot);
+  ghost = outlineOf(p.group);                      // faint outline of where it goes, shown only up close
+  ghost.position.copy(p.base); ghost.quaternion.copy(p.baseQuat);
+  ghost.visible = false;
+  engineRoot.add(ghost);
+  inRange = false; fitNote = '';
+  updateHeld(1);
   refresh();
+}
+function releaseHeld() {
+  if (ghost) { engineRoot.remove(ghost); ghost = null; }
+  held = null; inRange = false;
+}
+// Quarter turns: "turn" spins it about the vertical, "flip" tips it over away from you.
+function rotateHeld(kind) {
+  if (!held) return;
+  let axis = AX.y;
+  if (kind === 'flip') {
+    const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw);
+    axis = Math.abs(rx) > Math.abs(rz) ? v1.set(Math.sign(rx), 0, 0) : v1.set(0, 0, Math.sign(rz));
+  }
+  held.rot.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, -Math.PI / 2)).normalize();
+  sfx.ui();
+}
+function updateHeld(dt) {
+  const p = held;
+  p.rotShow.slerp(p.rot, Math.min(1, dt * 14));
+  const cp = Math.cos(player.pitch);
+  v3.set(-Math.sin(player.yaw) * cp, Math.sin(player.pitch), -Math.cos(player.yaw) * cp).multiplyScalar(p.holdDist);
+  v3.x += player.x; v3.z += player.z; v3.y = Math.max(0.8, v3.y + player.eye - 1.2);
+  p.group.quaternion.copy(p.rotShow).multiply(p.baseQuat);
+  p.group.position.copy(p.base).sub(p.pivot).applyQuaternion(p.rotShow).add(v3);
+  const near = v3.distanceTo(v2.copy(p.pivot).add(ENGINE_POS)) < 5.5;
+  const why = near ? reasonInstall(p) : null, ok = isOriented(p);
+  ghost.visible = near;
+  ghostMat.color.set(why ? 0xff5a45 : ok ? 0x4cff7a : 0xffc040);
+  ghostMat.opacity = 0.3 + 0.14 * Math.sin(performance.now() * 0.006);
+  const note = !near ? 'Turn it the right way round, then hold it up to the engine'
+    : why || (ok ? 'Lines up — drop it in' : 'Wrong way round — Turn or Flip it');
+  if (note !== fitNote || near !== inRange) { fitNote = note; inRange = near; refresh(); }
+}
+const canFit = () => !!held && inRange && !reasonInstall(held) && isOriented(held);
+function tryFit() {
+  if (!held) return;
+  if (!inRange) return toast('Hold it up to where it goes on the engine');
+  const why = reasonInstall(held);
+  if (why) { sfx.wrong(); return toast(why); }
+  if (!isOriented(held)) { sfx.wrong(); return toast("It won't go on that way round"); }
+  install(held);
 }
 function dropSpot() {
   ray.setFromCamera(new THREE.Vector2(0, -0.15), camera);
@@ -148,20 +225,21 @@ function dropSpot() {
 function drop() {
   if (!held) return;
   const p = held;
-  held = null;
-  setGhost(p, false);
+  releaseHeld();
   const [x, y, z] = dropSpot();
-  placeLoose(p, x, y, z, p.loose ? p.loose[3] : 0);
+  placeLoose(p, x, y, z, p.rot.clone());
   sfx.place(); save(); refresh();
 }
 function install(p, silent) {
-  if (held === p) { setGhost(p, false); held = null; }
-  if (p.group.parent !== engineRoot) toEngine(p);
+  if (held === p) releaseHeld();
+  toEngine(p);
+  p.rot.identity();
   p.state = 'installed'; p.installed = true;
   if (!silent) { p.anim = 0; sfx.place(); buzz(12); save(); refresh(); }
 }
 function uninstall(p) {
   p.bolts.forEach((b) => setTight(b, 0));
+  p.rot.identity();
   sfx.remove();
   hold(p);
   save();
@@ -184,7 +262,7 @@ function load() {
     const s = data.parts[p.id];
     if (!s) continue;
     if (s.b) { install(p, true); p.bolts.forEach((b, i) => setTight(b, clamp(+s.b[i] || 0, 0, 1))); }
-    else if (s.l && s.l.length === 4) placeLoose(p, ...s.l);
+    else if (s.l && s.l.length === 7) placeSaved(p, s.l);
   }
   Object.assign(known, data.known || {});
   Object.assign(stats, data.stats || {});
@@ -195,8 +273,8 @@ function load() {
 }
 function resetGame() {
   stopEngine();
-  if (held) { setGhost(held, false); held = null; }
-  for (const p of fitted) { p.bolts.forEach((b) => setTight(b, 0)); placeLoose(p, ...p.home); }
+  releaseHeld();
+  for (const p of fitted) { p.bolts.forEach((b) => setTight(b, 0)); placeSaved(p, p.home); }
   for (const k in known) delete known[k];
   Object.assign(stats, { energy: 100, hunger: 100, thirst: 100 });
   Object.assign(time, { day: 1, t: 8 / 24 });
@@ -302,7 +380,8 @@ function modal(title, html, acts = [['OK']]) {
 const HELP = `
 <ul>
 <li><b>Move</b> with your left thumb, <b>look</b> by dragging anywhere else. <b>Tap</b> things to use them. (Keyboard: WASD, drag to look, C to crouch.)</li>
-<li>The engine parts are on the <b>shelf at the back</b>. Tap one to pick it up, carry it to the engine and tap its <b>green outline</b>. Red means something is missing or in the way.</li>
+<li>The engine parts are on the <b>shelf at the back</b>, lying any way up. Tap one to grab it. <b>Turn</b> and <b>Flip</b> it until it faces the way it fits, hold it up to its place on the engine, and <b>drop it in</b>.</li>
+<li>An outline shows up close: <b>green</b> lines up, <b>amber</b> is the wrong way round, <b>red</b> means something is missing or in the way.</li>
 <li>Every bolt goes in loose. Pick a <b>spanner size</b>, then <b>press and hold</b> a bolt. Nobody tells you the size. <b>↻ / ↺</b> flips the ratchet.</li>
 <li><b>Crouch</b> to get at the underside of the engine.</li>
 <li>Tap a fitted part to take it off again once its bolts are undone.</li>
@@ -334,14 +413,15 @@ function refresh() {
   $('startBtn').classList.toggle('danger', !!run);
   $('startBtn').classList.toggle('primary', !run);
   $('throttle').hidden = !(run && run.phase === 'run');
-  $('bottom').hidden = !!run; $('dirBtn').hidden = !!run;
+  $('bottom').hidden = !!run; $('dirBtn').hidden = !!run || !!held;
+  $('turnBtn').hidden = $('flipBtn').hidden = !held;
 
   const strip = $('strip');
   if (held) {
-    const why = reasonInstall(held);
+    const fit = canFit();
     $('stripName').textContent = held.name;
-    $('stripSub').textContent = why || 'Tap its green outline on the engine';
-    $('stripAct').textContent = 'Drop'; $('stripAct').className = ''; $('stripAct').hidden = false;
+    $('stripSub').textContent = fitNote;
+    $('stripAct').textContent = fit ? 'Drop in' : 'Put down'; $('stripAct').className = fit ? 'primary' : ''; $('stripAct').hidden = false;
     strip.hidden = false;
   } else if (selected && !run) {
     const n = selected.bolts.length, t = selected.bolts.filter((b) => b.tight >= 1).length;
@@ -364,8 +444,10 @@ function refreshStats() {
 $('dirBtn').onclick = () => { unlockAudio(); sfx.ui(); dir = -dir; refresh(); };
 $('crouchBtn').onclick = () => { player.crouch = !player.crouch; refresh(); };
 $('stripClose').onclick = () => { if (held) drop(); selected = null; refresh(); };
+$('turnBtn').onclick = () => rotateHeld('turn');
+$('flipBtn').onclick = () => rotateHeld('flip');
 $('stripAct').onclick = () => {
-  if (held) return drop();
+  if (held) return canFit() ? install(held) : drop();
   if (!selected) return;
   const why = reasonRemove(selected);
   if (why) { sfx.wrong(); toast(why); } else uninstall(selected);
@@ -413,6 +495,7 @@ function findBolt(x, y) {
 }
 function beginTurn(c) {
   const b = c.b;
+  if (held) { toast('Your hands are full'); return; }
   if (c.dist > BOLT_REACH) { toast('Get closer'); return; }
   if (b.size !== tool) { sfx.wrong(); buzz(30); toast(`The ${tool} mm doesn't fit`); return; }
   if (dir > 0 && b.tight >= 1) { toast("That one's tight"); return; }
@@ -428,16 +511,7 @@ function endTurn() {
 function handleTap(x, y) {
   if (busy) return;
   const list = hitsAt(x, y);
-  if (held && !run) {
-    let on = list.some((h) => partOf(h.object) === held);
-    if (!on) { const s = toScreen(bb.setFromObject(held.group).getCenter(v1)); on = !!s && Math.hypot(s.x - x, s.y - y) < 44; }
-    if (on) {
-      if (bb.setFromObject(held.group).getCenter(v1).distanceTo(camera.position) > REACH + 6) return toast('Get closer');
-      const why = reasonInstall(held);
-      if (why) { sfx.wrong(); toast(why); } else install(held);
-      return;
-    }
-  }
+  if (held && !run && inRange && list.some((h) => h.distance < REACH + 8 && h.object.parent && engineRoot.getObjectById(h.object.id))) return tryFit();
   const h = list.find((i) => partOf(i.object) !== held);
   let part = h && h.distance < REACH ? partOf(h.object) : null;
   if (!part && !run) {                                    // small parts are hard to hit with a thumb
@@ -733,7 +807,7 @@ function frame(now) {
     p.group.position.set(p.base.x + p.from[0] * k, p.base.y + p.from[1] * k, p.base.z + p.from[2] * k);
     if (p.anim >= 1) delete p.anim;
   }
-  if (held) ghostOk.opacity = ghostNo.opacity = 0.32 + 0.16 * Math.sin(now * 0.006);
+  if (held) updateHeld(dt);
   if (run) tickEngine(dt);
   tickPuffs(dt);
   if ((hudT += dt) > 0.25) { hudT = 0; applyTime(); refreshStats(); }
@@ -754,10 +828,10 @@ requestAnimationFrame(frame);
 
 // Hooks for tests and for the curious.
 window.__game = {
-  parts, byId, player, stats, time, world, diagnose, install, uninstall, hold, drop, use, findBolt, camera, handleTap,
+  parts, byId, player, stats, time, world, diagnose, install, uninstall, hold, drop, use, findBolt, camera, handleTap, tryFit, ORI, isOriented,
   get state() { return { tool, dir, held: held && held.id, selected: selected && selected.id, run: run && run.phase, won, busy }; },
   buildAll(tight = true) {
-    if (held) { setGhost(held, false); held = null; }
+    releaseHeld();
     for (const p of fitted) { if (!p.installed) install(p, true); p.bolts.forEach((b) => setTight(b, tight ? 1 : 0)); }
     save(); refresh();
   },

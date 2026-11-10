@@ -33,14 +33,26 @@ let pt = await page.evaluate(() => __game.screenOf(__game.byId.crank.group));
 await page.mouse.click(pt.x, pt.y);
 assert.equal(await page.evaluate(() => __game.state.held), 'crank');
 
-// carry it to the engine, crouch, tap the outline
-await page.evaluate(() => { const g = __game; Object.assign(g.player, { x: 10, z: 27, crouch: true }); g.lookAt(10, 8.5, 21.5); });
+// it comes off the shelf lying the wrong way up
+assert.equal(await page.evaluate(() => __game.isOriented(__game.byId.crank)), false);
+
+// carry it to the engine: the wrong way round, it will not go in
+await page.evaluate(() => { const g = __game; Object.assign(g.player, { x: 10, z: 27, crouch: true }); g.lookAt(10, 9.6, 21.5); g.byId.crank.rot.copy(g.ORI.find((q) => Math.abs(q.y) > 0.7 && Math.abs(q.w) > 0.7)); });
 await settle();
-pt = await page.evaluate(() => __game.screenOf(__game.byId.crank.group));
-await page.mouse.click(pt.x, pt.y);
+assert.equal(await page.locator('#stripAct').textContent(), 'Put down');
+await page.evaluate(() => __game.tryFit());
+assert.equal(await page.evaluate(() => __game.byId.crank.installed), false, 'a part turned the wrong way must not fit');
+
+// quarter turns bring it round; then it drops in
+for (let i = 0; i < 4 && !(await page.evaluate(() => __game.isOriented(__game.byId.crank))); i++) await page.click('#turnBtn');
+assert.equal(await page.evaluate(() => __game.isOriented(__game.byId.crank)), true);
+await page.waitForFunction(() => document.getElementById('stripAct').textContent === 'Drop in', null, { timeout: 20000 });
+await page.click('#stripAct');
 assert.equal(await page.evaluate(() => __game.byId.crank.installed), true);
 
 // main cap bolt from underneath: wrong spanner, then the right one
+// a bolted part can be picked up and fitted too
+await page.evaluate(() => { const g = __game; g.hold(g.byId.maincap1); g.byId.maincap1.rot.identity(); });
 await page.evaluate(() => { const g = __game; g.install(g.byId.maincap1); Object.assign(g.player, { x: 7.9, z: 25.2, crouch: true }); g.lookAt(7.85, 8.1, 21.8); });
 await settle();
 pt = await page.evaluate(() => __game.boltScreen(__game.byId.maincap1.bolts[1]));
