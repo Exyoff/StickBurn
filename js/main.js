@@ -1,12 +1,15 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { RoomEnvironment } from '../vendor/RoomEnvironment.js';
-import { buildEngine, buildStand, buildSpanner, setTight, setCrank, MAT } from './engine.js';
+import { buildEngine, buildStand, buildSpanner, setTight, setCrank } from './engine.js';
+import { buildWorld, ROOM, ENGINE_POS, SHELF } from './world.js';
 import { sfx, motor, unlockAudio } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
-const SAVE_KEY = 'bolt-by-bolt-save-v1';
+const SAVE_KEY = 'bolt-by-bolt-save-v2';
 const SIZES = [8, 10, 12, 13, 14, 16, 17, 19];
-const FLOOR_Y = -4.5;
+const DAY_SECONDS = 900;                 // one full day
+const REACH = 24, BOLT_REACH = 17;       // 2.4 m to grab, 1.7 m to wrench
+const EYE = 16.5, EYE_CROUCH = 4.6, RADIUS = 2.2;
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
 /* ================= renderer & scene ================= */
@@ -16,115 +19,85 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
+renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1c1d20);
-scene.fog = new THREE.Fog(0x1c1d20, 22, 46);
-const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+scene.background = new THREE.Color(0x86bff0);
+scene.fog = new THREE.Fog(0x86bff0, 200, 760);
+const camera = new THREE.PerspectiveCamera(68, 1, 0.3, 1200);
+camera.rotation.order = 'YXZ';
 
-const envOf = (r) => { const g = new THREE.PMREMGenerator(r); const t = g.fromScene(new RoomEnvironment(), 0.04).texture; g.dispose(); return t; };
-scene.environment = envOf(renderer);
-scene.environmentIntensity = 0.75;
-scene.add(new THREE.HemisphereLight(0xdde6ff, 0x4a3d30, 0.45));
-const sun = new THREE.DirectionalLight(0xfff0d8, 2.2);
-sun.position.set(6, 12, 8);
-sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
-Object.assign(sun.shadow.camera, { left: -7, right: 7, top: 8, bottom: -7, near: 1, far: 40 });
-sun.shadow.bias = -0.0015;
-scene.add(sun);
-const fill = new THREE.DirectionalLight(0x9fb8ff, 0.7);
-fill.position.set(-7, -3, -6);
-scene.add(fill);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+pmrem.dispose();
+const hemi = new THREE.HemisphereLight(0xdde8ff, 0x57493a, 0.8);
+scene.add(hemi);
 
-buildGarage();
-
+const world = buildWorld(scene);
 const engineRoot = new THREE.Group();
-scene.add(engineRoot, buildStand(FLOOR_Y));
+engineRoot.position.copy(ENGINE_POS);
+const stand = buildStand(-ENGINE_POS.y);
+stand.position.copy(ENGINE_POS);
+const looseRoot = new THREE.Group();
+scene.add(engineRoot, stand, looseRoot);
+for (const [x0, x1, z0, z1] of [[-2, 2, -0.9, 0.9], [-0.5, 0.5, -3.3, -0.9]])
+  world.colliders.push({ x0: ENGINE_POS.x + x0, x1: ENGINE_POS.x + x1, z0: ENGINE_POS.z + z0, z1: ENGINE_POS.z + z1 });
+
 const parts = buildEngine();
 const byId = Object.fromEntries(parts.map((p) => [p.id, p]));
 const fitted = parts.filter((p) => p.id !== 'block');
 const totalBolts = parts.reduce((n, p) => n + p.bolts.length, 0);
-makeThumbs();
-byId.block.installed = true;
+for (const p of parts) { p.baseQuat = p.group.quaternion.clone(); p.state = 'loose'; }
+byId.block.state = 'installed'; byId.block.installed = true;
 engineRoot.add(byId.block.group);
 
 const spanner = buildSpanner();
 spanner.visible = false;
 scene.add(spanner);
-
 const ghostOk = new THREE.MeshBasicMaterial({ color: 0x4cff7a, transparent: true, opacity: 0.4, depthWrite: false });
 const ghostNo = new THREE.MeshBasicMaterial({ color: 0xff5a45, transparent: true, opacity: 0.4, depthWrite: false });
 
-function buildGarage() {
-  const c = document.createElement('canvas');
-  c.width = c.height = 256;
-  const g = c.getContext('2d');
-  g.fillStyle = '#6d6c68'; g.fillRect(0, 0, 256, 256);
-  for (let i = 0; i < 2500; i++) {
-    g.fillStyle = `rgba(${Math.random() < 0.5 ? '20,20,20' : '200,200,195'},${Math.random() * 0.08})`;
-    g.fillRect(Math.random() * 256, Math.random() * 256, 1 + Math.random() * 3, 1 + Math.random() * 3);
-  }
-  g.strokeStyle = 'rgba(0,0,0,.28)'; g.lineWidth = 2; g.strokeRect(0, 0, 256, 256);
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(9, 9); tex.colorSpace = THREE.SRGBColorSpace;
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(36, 36), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0 }));
-  floor.rotation.x = -Math.PI / 2; floor.position.y = FLOOR_Y; floor.receiveShadow = true;
-  scene.add(floor);
-  const room = new THREE.Mesh(new THREE.BoxGeometry(36, 16, 36), new THREE.MeshStandardMaterial({ color: 0x5d615f, roughness: 1, side: THREE.BackSide }));
-  room.position.y = FLOOR_Y + 8;
-  scene.add(room);
-
-  const wood = new THREE.MeshStandardMaterial({ color: 0x7a5b3a, roughness: 0.85 });
-  const B = (w, h, d, m, x, y, z) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(x, y, z); o.castShadow = o.receiveShadow = true; scene.add(o); return o; };
-  B(9, 0.3, 2.4, wood, 0, FLOOR_Y + 3.2, -16.4);
-  for (const x of [-4, 4]) B(0.3, 3.2, 2.2, wood, x, FLOOR_Y + 1.6, -16.4);
-  B(2.2, 1.1, 1.2, MAT.stand, -2.4, FLOOR_Y + 3.9, -16.5);
-  B(1.4, 0.7, 0.9, MAT.dark, 1.8, FLOOR_Y + 3.7, -16.4);
-  B(10, 4, 0.1, new THREE.MeshStandardMaterial({ color: 0x8a7a5c, roughness: 0.9 }), 0, FLOOR_Y + 7, -17.9);
-  for (let i = 0; i < 3; i++) {
-    const t = new THREE.Mesh(new THREE.TorusGeometry(1.25, 0.55, 12, 28), MAT.rubber);
-    t.rotation.x = Math.PI / 2; t.position.set(13, FLOOR_Y + 0.55 + i * 1.1, -13); t.castShadow = true;
-    scene.add(t);
-  }
-  B(1.6, 2.6, 1.6, new THREE.MeshStandardMaterial({ color: 0x2f5d8a, roughness: 0.6, metalness: 0.4 }), -14, FLOOR_Y + 1.3, 6);
-}
-
-// Render each part once to a small image for the parts shelf.
-function makeThumbs() {
-  const r = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
-  r.setSize(160, 160);
-  r.toneMapping = THREE.ACESFilmicToneMapping;
-  const s = new THREE.Scene();
-  s.environment = envOf(r);
-  s.add(new THREE.HemisphereLight(0xffffff, 0x555555, 0.6));
-  const d = new THREE.DirectionalLight(0xffffff, 2.5); d.position.set(3, 6, 4); d.intensity = 1.5; s.add(d);
-  const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
-  const bb = new THREE.Box3(), c = new THREE.Vector3(), sz = new THREE.Vector3();
-  for (const p of fitted) {
-    s.add(p.group);
-    bb.setFromObject(p.group); bb.getCenter(c); bb.getSize(sz);
-    const dir = new THREE.Vector3(p.from[0] + 0.55, p.from[1] * 0.6 + 0.5, p.from[2] + 0.65).normalize();
-    cam.position.copy(c).addScaledVector(dir, Math.max(sz.length(), 0.5) * 2.1);
-    cam.lookAt(c);
-    r.render(s, cam);
-    p.thumb = r.domElement.toDataURL('image/png');
-    s.remove(p.group);
-  }
-  r.dispose();
-  r.forceContextLoss();
-}
-
 /* ================= game state ================= */
-let tool = 'hand';        // 'hand' or a spanner size in mm
-let dir = 1;              // 1 tighten, -1 loosen
-let held = null;          // part picked from the shelf, shown as a ghost
-let selected = null;      // installed part shown in the info strip
-let turning = null;       // bolt under the spanner
-let playTime = 0, won = false;
-const known = {};         // part id -> spanner size the player has found out
-let run = null;           // engine start/run state
+const player = { x: 39, z: 80, yaw: 0.6, pitch: -0.12, crouch: false, eye: EYE };
+const stats = { energy: 100, hunger: 100, thirst: 100 };
+const time = { day: 1, t: 8 / 24 };
+let tool = 'hand', dir = 1;
+let held = null, selected = null, turning = null;
+let playTime = 0, won = false, busy = false;
+const known = {};
+let run = null;
+
+/* ---------- parts lying around ---------- */
+const qY = new THREE.Quaternion(), Y = new THREE.Vector3(0, 1, 0), bb = new THREE.Box3();
+const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), v3 = new THREE.Vector3();
+function pose(p, r) {
+  qY.setFromAxisAngle(Y, r);
+  p.group.quaternion.copy(qY).multiply(p.baseQuat);
+  p.group.position.copy(p.base).applyQuaternion(qY);
+  if (p.group.parent !== looseRoot) looseRoot.add(p.group);
+  return bb.setFromObject(p.group);
+}
+// Rest a part with the bottom-centre of its bounding box at (x, y, z).
+function placeLoose(p, x, y, z, r) {
+  const b = pose(p, r);
+  b.getCenter(v1);
+  p.group.position.x += x - v1.x; p.group.position.y += y - b.min.y; p.group.position.z += z - v1.z;
+  p.loose = [x, y, z, r];
+  p.state = 'loose'; p.installed = false;
+}
+function stockShelf() {
+  let row = 0, cur = SHELF.x0;
+  for (const p of fitted) {
+    let b = pose(p, 0).getSize(v2).clone();
+    const r = b.x < 0.6 && b.z > 0.8 ? Math.PI / 2 : 0;      // turn thin plates to face the room
+    if (r) b = pose(p, r).getSize(v2).clone();
+    if (cur + b.x > SHELF.x1 && row < SHELF.levels.length) { row++; cur = SHELF.x0; }
+    const onFloor = row >= SHELF.levels.length;
+    placeLoose(p, cur + b.x / 2, onFloor ? 0 : SHELF.levels[row], onFloor ? 11 : SHELF.z, r);
+    p.home = p.loose.slice();
+    cur += b.x + 0.95;
+  }
+}
 
 const reasonInstall = (p) => {
   const need = p.req.filter((id) => !byId[id].installed);
@@ -135,6 +108,7 @@ const reasonInstall = (p) => {
 };
 const reasonRemove = (p) => {
   if (p.id === 'block') return 'That stays on the stand';
+  if (held) return 'Your hands are full';
   if (p.bolts.some((b) => b.tight > 0)) return 'Undo all of its bolts first';
   const dep = parts.find((q) => q.installed && q.req.includes(p.id));
   if (dep) return `Take the ${dep.name.toLowerCase()} off first`;
@@ -151,38 +125,55 @@ function setGhost(p, on) {
     else if (o.userData.mat) { o.material = o.userData.mat; delete o.userData.mat; o.castShadow = true; }
   });
 }
-function hold(p) {
-  drop();
-  held = p; selected = null;
-  p.group.position.copy(p.base);
+function toEngine(p) {
   engineRoot.add(p.group);
+  p.group.position.copy(p.base);
+  p.group.quaternion.copy(p.baseQuat);
+}
+// Carry a part: it shows as an outline where it belongs on the engine.
+function hold(p) {
+  held = p; selected = null; p.state = 'held'; p.installed = false;
+  toEngine(p);
   setGhost(p, true);
   refresh();
 }
+function dropSpot() {
+  ray.setFromCamera(new THREE.Vector2(0, -0.15), camera);
+  const h = ray.intersectObjects(world.surfaces, false)[0];
+  if (h && h.distance < REACH && v1.copy(h.face.normal).transformDirection(h.object.matrixWorld).y > 0.5) return [h.point.x, h.point.y, h.point.z];
+  let x = clamp(player.x - Math.sin(player.yaw) * 7, 2.5, ROOM.w - 2.5), z = clamp(player.z - Math.cos(player.yaw) * 7, 9.5, ROOM.d - 2.5);
+  if (world.colliders.some((c) => x > c.x0 && x < c.x1 && z > c.z0 && z < c.z1)) { x = player.x; z = player.z; }
+  return [x, 0, z];
+}
 function drop() {
   if (!held) return;
-  setGhost(held, false);
-  engineRoot.remove(held.group);
+  const p = held;
   held = null;
-  refresh();
+  setGhost(p, false);
+  const [x, y, z] = dropSpot();
+  placeLoose(p, x, y, z, p.loose ? p.loose[3] : 0);
+  sfx.place(); save(); refresh();
 }
 function install(p, silent) {
   if (held === p) { setGhost(p, false); held = null; }
-  p.installed = true;
-  engineRoot.add(p.group);
+  if (p.group.parent !== engineRoot) toEngine(p);
+  p.state = 'installed'; p.installed = true;
   if (!silent) { p.anim = 0; sfx.place(); buzz(12); save(); refresh(); }
 }
 function uninstall(p) {
-  p.installed = false;
-  engineRoot.remove(p.group);
   p.bolts.forEach((b) => setTight(b, 0));
-  if (selected === p) selected = null;
-  sfx.remove(); save(); refresh();
+  sfx.remove();
+  hold(p);
+  save();
 }
 
+/* ---------- save ---------- */
 function save() {
-  const data = { parts: {}, known, playTime, won };
-  for (const p of fitted) if (p.installed) data.parts[p.id] = p.bolts.map((b) => +b.tight.toFixed(2));
+  const data = { parts: {}, known, playTime, won, stats, time, player: [player.x, player.z, player.yaw] };
+  for (const p of fitted) {
+    data.parts[p.id] = p.installed ? { b: p.bolts.map((b) => +b.tight.toFixed(2)) }
+      : { l: (p.state === 'held' ? p.loose || p.home : p.loose).map((n) => +n.toFixed(2)) };
+  }
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch {}
 }
 function load() {
@@ -190,26 +181,104 @@ function load() {
   try { data = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch {}
   if (!data || !data.parts) return false;
   for (const p of fitted) {
-    const t = data.parts[p.id];
-    if (!t) continue;
-    install(p, true);
-    p.bolts.forEach((b, i) => setTight(b, clamp(+t[i] || 0, 0, 1)));
+    const s = data.parts[p.id];
+    if (!s) continue;
+    if (s.b) { install(p, true); p.bolts.forEach((b, i) => setTight(b, clamp(+s.b[i] || 0, 0, 1))); }
+    else if (s.l && s.l.length === 4) placeLoose(p, ...s.l);
   }
   Object.assign(known, data.known || {});
+  Object.assign(stats, data.stats || {});
+  Object.assign(time, data.time || {});
+  if (data.player) [player.x, player.z, player.yaw] = data.player;
   playTime = data.playTime || 0; won = !!data.won;
   return true;
 }
-function resetBuild() {
+function resetGame() {
   stopEngine();
-  drop();
-  for (const p of fitted) { if (p.installed) engineRoot.remove(p.group); p.installed = false; p.bolts.forEach((b) => setTight(b, 0)); }
+  if (held) { setGhost(held, false); held = null; }
+  for (const p of fitted) { p.bolts.forEach((b) => setTight(b, 0)); placeLoose(p, ...p.home); }
   for (const k in known) delete known[k];
+  Object.assign(stats, { energy: 100, hunger: 100, thirst: 100 });
+  Object.assign(time, { day: 1, t: 8 / 24 });
+  Object.assign(player, { x: 39, z: 80, yaw: 0.6, pitch: -0.12, crouch: false });
   playTime = 0; won = false; selected = null; oil.scale.setScalar(0.001);
   setCrank(parts, 0);
   save(); refresh();
 }
-
 const buzz = (ms) => { try { navigator.vibrate && navigator.vibrate(ms); } catch {} };
+
+/* ================= survival & time ================= */
+function advance(hours) {
+  time.t += hours / 24;
+  while (time.t >= 1) { time.t -= 1; time.day++; }
+}
+function fadeThen(fn) {
+  busy = true;
+  $('fade').classList.add('on');
+  setTimeout(() => { fn(); setTimeout(() => { $('fade').classList.remove('on'); busy = false; }, 500); }, 950);
+}
+function sleep(forced) {
+  if (run) return toast('Not with the engine running');
+  if (!forced && stats.energy > 85) return toast("You're not tired");
+  if (held) drop();
+  const hours = forced ? 9 : clamp(Math.ceil((100 - stats.energy) / 12.5), 1, 8);
+  fadeThen(() => {
+    advance(hours);
+    stats.energy = forced ? 65 : Math.min(100, stats.energy + hours * 12.5);
+    stats.hunger = Math.max(forced ? 20 : 5, stats.hunger - hours * 3);
+    stats.thirst = Math.max(forced ? 20 : 5, stats.thirst - hours * 4);
+    Object.assign(player, { x: 44, z: 18, yaw: -1.2, pitch: -0.1, crouch: false });
+    save(); refresh();
+    toast(forced ? 'You collapsed. You wake up in bed, hours later.' : `You slept ${hours} hour${hours > 1 ? 's' : ''}.`, 3000);
+  });
+}
+let lastUse = 0;
+function use(what) {
+  const now = performance.now();
+  if (now - lastUse < 500) return;
+  lastUse = now;
+  if (what === 'bed') return sleep(false);
+  if (what === 'sink') {
+    if (stats.thirst > 97) return toast("You can't drink any more");
+    stats.thirst = Math.min(100, stats.thirst + 30); sfx.drink(); toast('Tap water. Cold.');
+  } else if (what === 'food') {
+    if (stats.hunger > 95) return toast("You're full");
+    stats.hunger = Math.min(100, stats.hunger + 35); stats.thirst = Math.max(0, stats.thirst - 4); sfx.eat(); toast('Sausage and macaroni.');
+  } else if (what === 'toilet') toast('Not now.');
+  else if (what === 'car') toast('Rolling shell, gearbox in. No engine — that part is on you.');
+  else if (what === 'sidedoor') toast('Locked. The key is somewhere.');
+  refresh();
+}
+const warned = {};
+function tickStats(dt) {
+  const starving = stats.hunger <= 0 || stats.thirst <= 0;
+  stats.hunger = Math.max(0, stats.hunger - dt * (100 / 720));
+  stats.thirst = Math.max(0, stats.thirst - dt * (100 / 540));
+  stats.energy = Math.max(0, stats.energy - dt * (100 / 900) * (starving ? 3 : 1) - (turning ? dt * 0.25 : 0) - (held ? dt * 0.04 : 0));
+  for (const [k, msg] of [['hunger', "You're getting hungry"], ['thirst', "You're thirsty"], ['energy', "You're exhausted — get to bed"]]) {
+    if (stats[k] < 20 && !warned[k]) { warned[k] = true; toast(msg, 2600); }
+    if (stats[k] > 30) warned[k] = false;
+  }
+  if (stats.energy <= 0 && !busy) { stopEngine(); sleep(true); }
+}
+const SKY_DAY = new THREE.Color(0x86bff0), SKY_NIGHT = new THREE.Color(0x05070d), SKY_DUSK = new THREE.Color(0xf0a268), sky = new THREE.Color();
+function applyTime() {
+  const h = time.t * 24;
+  const e = Math.sin((Math.PI * (h - 5)) / 17);                       // long northern summer day: 05:00–22:00
+  const sunUp = h > 5 && h < 22 ? e : -0.3;
+  const day = clamp((sunUp + 0.1) / 0.35, 0, 1);
+  sky.copy(SKY_NIGHT).lerp(SKY_DAY, day).lerp(SKY_DUSK, clamp(1 - Math.abs(sunUp - 0.08) / 0.22, 0, 1) * 0.55);
+  scene.background.copy(sky); scene.fog.color.copy(sky);
+  hemi.intensity = 0.08 + 0.5 * day;
+  scene.environmentIntensity = 0.3 + 0.3 * day;
+  const az = (Math.PI * (h - 5)) / 17;
+  world.sun.position.set(30 - Math.cos(az) * 620, sunUp * 520, 87 + 560);
+  world.sun.visible = sunUp > -0.05;
+  world.patch.material.opacity = Math.max(0, sunUp) * 0.22;
+  world.patch.position.x = 30 + Math.cos(az) * 12;
+  const hh = Math.floor(h), mm = Math.floor((h - hh) * 60);
+  $('cTime').textContent = `Day ${time.day} · ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
 
 /* ================= HUD ================= */
 let toastTimer = 0;
@@ -225,56 +294,54 @@ function modal(title, html, acts = [['OK']]) {
   for (const [label, fn, cls] of acts) {
     const b = document.createElement('button');
     b.textContent = label; if (cls) b.className = cls;
-    b.onclick = () => { $('modal').hidden = true; fn && fn(); };
+    b.onclick = () => { unlockAudio(); $('modal').hidden = true; fn && fn(); };
     box.appendChild(b);
   }
   $('modal').hidden = false;
 }
 const HELP = `
 <ul>
-<li><b>Parts</b> opens the shelf. Pick a part, then tap its <b>green outline</b> on the engine to fit it. Red means something is missing or in the way.</li>
-<li>Every bolt comes loose. Pick a <b>spanner size</b>, then <b>press and hold</b> on a bolt to turn it. Nobody tells you the size — try one.</li>
-<li><b>↻ / ↺</b> flips the ratchet between tighten and loosen.</li>
-<li>With the <b>hand</b>, tap a fitted part to inspect or remove it (all its bolts must be undone).</li>
-<li>Drag to look around, pinch to zoom, two fingers to pan, double-tap to focus.</li>
-<li>When you think it's done, hit <b>Start</b>. The engine will let you know what you forgot.</li>
+<li><b>Move</b> with your left thumb, <b>look</b> by dragging anywhere else. <b>Tap</b> things to use them. (Keyboard: WASD, drag to look, C to crouch.)</li>
+<li>The engine parts are on the <b>shelf at the back</b>. Tap one to pick it up, carry it to the engine and tap its <b>green outline</b>. Red means something is missing or in the way.</li>
+<li>Every bolt goes in loose. Pick a <b>spanner size</b>, then <b>press and hold</b> a bolt. Nobody tells you the size. <b>↻ / ↺</b> flips the ratchet.</li>
+<li><b>Crouch</b> to get at the underside of the engine.</li>
+<li>Tap a fitted part to take it off again once its bolts are undone.</li>
+<li>Watch <b>energy, hunger and thirst</b>: eat at the fridge or stove, drink from a tap, sleep in the bed. Run out of energy and you collapse.</li>
+<li>A day lasts 15 minutes. When the engine is done, hit <b>Start</b>.</li>
 </ul>`;
 
 function buildTools() {
   const box = $('tools');
   const mk = (label, sub, val) => {
     const b = document.createElement('button');
-    b.innerHTML = sub ? `${label}<small>${sub}</small>` : label;
+    b.innerHTML = `${label}<small>${sub}</small>`;
     b.dataset.tool = val;
-    b.onclick = () => { unlockAudio(); sfx.ui(); tool = val; if (val !== 'hand') { drop(); selected = null; } refresh(); };
+    b.onclick = () => { unlockAudio(); sfx.ui(); tool = val; refresh(); };
     box.appendChild(b);
   };
   mk('✋', 'hand', 'hand');
   for (const s of SIZES) mk(String(s), 'mm', s);
 }
-
 function refresh() {
   const tight = parts.reduce((n, p) => n + (p.installed ? p.bolts.filter((b) => b.tight >= 1).length : 0), 0);
-  const inst = fitted.filter((p) => p.installed).length;
   $('sBolts').textContent = `${tight}/${totalBolts}`;
-  $('sParts').textContent = `${inst}/${fitted.length}`;
-  $('bar').firstElementChild.style.width = `${((tight + inst) / (totalBolts + fitted.length)) * 100}%`;
-  $('partsN').textContent = `(${fitted.length - inst})`;
+  $('sParts').textContent = `${fitted.filter((p) => p.installed).length}/${fitted.length}`;
   $('dirBtn').textContent = dir > 0 ? '↻ Tighten' : '↺ Loosen';
   $('dirBtn').classList.toggle('danger', dir < 0);
+  $('crouchBtn').classList.toggle('on', player.crouch);
   for (const b of $('tools').children) b.classList.toggle('on', String(tool) === b.dataset.tool);
   $('startBtn').textContent = run ? 'Stop' : 'Start';
   $('startBtn').classList.toggle('danger', !!run);
   $('startBtn').classList.toggle('primary', !run);
   $('throttle').hidden = !(run && run.phase === 'run');
-  $('bottom').hidden = !!run;
+  $('bottom').hidden = !!run; $('dirBtn').hidden = !!run;
 
   const strip = $('strip');
   if (held) {
     const why = reasonInstall(held);
     $('stripName').textContent = held.name;
-    $('stripSub').textContent = why || 'Tap the green outline to fit it';
-    $('stripAct').textContent = 'Put back'; $('stripAct').className = '';
+    $('stripSub').textContent = why || 'Tap its green outline on the engine';
+    $('stripAct').textContent = 'Drop'; $('stripAct').className = ''; $('stripAct').hidden = false;
     strip.hidden = false;
   } else if (selected && !run) {
     const n = selected.bolts.length, t = selected.bolts.filter((b) => b.tight >= 1).length;
@@ -285,27 +352,17 @@ function refresh() {
     $('stripAct').hidden = selected.id === 'block';
     strip.hidden = false;
   } else strip.hidden = true;
-  if (!held) $('stripAct').hidden = !!(selected && selected.id === 'block');
-
-  if (!$('drawer').hidden) fillDrawer();
 }
-function fillDrawer() {
-  const grid = $('grid');
-  grid.innerHTML = '';
-  const left = fitted.filter((p) => !p.installed);
-  if (!left.length) { grid.innerHTML = '<p>The shelf is empty. Everything is on the engine.</p>'; return; }
-  for (const p of left) {
-    const b = document.createElement('button');
-    b.className = 'card';
-    b.innerHTML = `<img alt="" src="${p.thumb}">${p.name}`;
-    b.onclick = () => { sfx.ui(); $('drawer').hidden = true; tool = 'hand'; hold(p); if (reasonInstall(p)) toast(reasonInstall(p)); };
-    grid.appendChild(b);
+function refreshStats() {
+  for (const [k, id, row] of [['energy', 'sEnergy', 'rEnergy'], ['hunger', 'sHunger', 'rHunger'], ['thirst', 'sThirst', 'rThirst']]) {
+    $(id).style.width = `${stats[k]}%`;
+    $(row).classList.toggle('low', stats[k] < 20);
   }
+  $('vignette').style.opacity = clamp(1 - Math.min(stats.energy, stats.hunger + 12, stats.thirst + 12) / 18, 0, 1);
 }
 
-$('partsBtn').onclick = () => { unlockAudio(); sfx.ui(); $('drawer').hidden = false; fillDrawer(); };
-$('drawerClose').onclick = () => { $('drawer').hidden = true; };
 $('dirBtn').onclick = () => { unlockAudio(); sfx.ui(); dir = -dir; refresh(); };
+$('crouchBtn').onclick = () => { player.crouch = !player.crouch; refresh(); };
 $('stripClose').onclick = () => { if (held) drop(); selected = null; refresh(); };
 $('stripAct').onclick = () => {
   if (held) return drop();
@@ -314,41 +371,23 @@ $('stripAct').onclick = () => {
   if (why) { sfx.wrong(); toast(why); } else uninstall(selected);
 };
 $('menuBtn').onclick = () => modal('Bolt by Bolt', HELP, [
-  ['Reset build', () => modal('Strip it all down?', '<p>Every part goes back on the shelf and every bolt comes undone.</p>', [['Cancel'], ['Reset', resetBuild, 'danger']]), 'danger'],
+  ['Start over', () => modal('Start over?', '<p>Every part goes back on the shelf, every bolt comes undone, and it is day one again.</p>', [['Cancel'], ['Start over', resetGame, 'danger']]), 'danger'],
   ['Back to work', null, 'primary'],
 ]);
 $('startBtn').onclick = () => { unlockAudio(); run ? stopEngine() : startEngine(); };
 $('thr').oninput = (e) => { if (run) run.target = +e.target.value; };
 
-/* ================= camera ================= */
-const cam = { target: new THREE.Vector3(0, 1.3, 0), goal: new THREE.Vector3(0, 1.3, 0), r: 12, rGoal: 12, th: 0.75, ph: 1.15 };
-function resize() {
-  const w = window.innerWidth, h = window.innerHeight;
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-}
-function placeCamera() {
-  const sp = Math.sin(cam.ph);
-  camera.position.set(
-    cam.target.x + cam.r * sp * Math.sin(cam.th),
-    Math.max(FLOOR_Y + 0.4, cam.target.y + cam.r * Math.cos(cam.ph)),
-    cam.target.z + cam.r * sp * Math.cos(cam.th),
-  );
-  camera.lookAt(cam.target);
-}
-window.addEventListener('resize', resize);
-resize();
-cam.r = cam.rGoal = camera.aspect < 1 ? 17 : 11;
-
 /* ================= picking ================= */
 const ray = new THREE.Raycaster();
-const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), ndc = new THREE.Vector2();
+const ndc = new THREE.Vector2();
 const partOf = (o) => { while (o && !o.userData.partId) o = o.parent; return o ? byId[o.userData.partId] : null; };
-function hits(x, y) {
+const useOf = (o) => { while (o && !o.userData.use) o = o.parent; return o ? o.userData.use : null; };
+const toScreen = (v) => { v.project(camera); return v.z > 1 ? null : { x: ((v.x + 1) / 2) * window.innerWidth, y: ((1 - v.y) / 2) * window.innerHeight }; };
+const pickRoots = [engineRoot, looseRoot, world.group];
+function hitsAt(x, y) {
   ndc.set((x / window.innerWidth) * 2 - 1, -(y / window.innerHeight) * 2 + 1);
   ray.setFromCamera(ndc, camera);
-  return ray.intersectObject(engineRoot, true);
+  return ray.intersectObjects(pickRoots, true);
 }
 // Nearest visible bolt to a screen point, with a finger-sized tolerance.
 function findBolt(x, y) {
@@ -357,23 +396,24 @@ function findBolt(x, y) {
     if (!p.installed) continue;
     for (const b of p.bolts) {
       b.head.getWorldPosition(v1);
-      v2.copy(v1).project(camera);
-      if (v2.z > 1) continue;
-      const d = Math.hypot((v2.x + 1) / 2 * window.innerWidth - x, (1 - v2.y) / 2 * window.innerHeight - y);
-      if (d < 34) cands.push({ b, d, pos: v1.clone() });
+      const dist = v1.distanceTo(camera.position);
+      const pos = v1.clone(), s = toScreen(v1);
+      if (!s) continue;
+      const d = Math.hypot(s.x - x, s.y - y);
+      if (d < 34) cands.push({ b, d, pos, dist });
     }
   }
   cands.sort((a, b) => a.d - b.d);
   for (const c of cands) {
-    const dist = c.pos.distanceTo(camera.position);
     ray.set(camera.position, v2.copy(c.pos).sub(camera.position).normalize());
-    const h = ray.intersectObject(engineRoot, true).find((i) => partOf(i.object) !== held);
-    if (!h || h.distance > dist - 0.2 || h.object.userData.bolt === c.b) return c.b;
+    const h = ray.intersectObjects(pickRoots, true).find((i) => partOf(i.object) !== held);
+    if (!h || h.distance > c.dist - 0.2 || h.object.userData.bolt === c.b) return c;
   }
   return null;
 }
-
-function beginTurn(b) {
+function beginTurn(c) {
+  const b = c.b;
+  if (c.dist > BOLT_REACH) { toast('Get closer'); return; }
   if (b.size !== tool) { sfx.wrong(); buzz(30); toast(`The ${tool} mm doesn't fit`); return; }
   if (dir > 0 && b.tight >= 1) { toast("That one's tight"); return; }
   if (dir < 0 && b.tight <= 0) { toast("That one's already undone"); return; }
@@ -385,100 +425,134 @@ function endTurn() {
   turning = null;
   spanner.visible = false;
 }
-
 function handleTap(x, y) {
-  if (run) return;
-  const list = hits(x, y);
-  if (held) {
-    const onGhost = list.some((h) => partOf(h.object) === held);
-    let near = false;
-    if (!onGhost) {
-      new THREE.Box3().setFromObject(held.group).getCenter(v1).project(camera);
-      near = Math.hypot((v1.x + 1) / 2 * window.innerWidth - x, (1 - v1.y) / 2 * window.innerHeight - y) < 48;
-    }
-    if (onGhost || near) {
+  if (busy) return;
+  const list = hitsAt(x, y);
+  if (held && !run) {
+    let on = list.some((h) => partOf(h.object) === held);
+    if (!on) { const s = toScreen(bb.setFromObject(held.group).getCenter(v1)); on = !!s && Math.hypot(s.x - x, s.y - y) < 44; }
+    if (on) {
+      if (bb.setFromObject(held.group).getCenter(v1).distanceTo(camera.position) > REACH + 6) return toast('Get closer');
       const why = reasonInstall(held);
       if (why) { sfx.wrong(); toast(why); } else install(held);
+      return;
     }
+  }
+  const h = list.find((i) => partOf(i.object) !== held);
+  let part = h && h.distance < REACH ? partOf(h.object) : null;
+  if (!part && !run) {                                    // small parts are hard to hit with a thumb
+    let best = 40;
+    for (const p of fitted) {
+      if (p.state !== 'loose') continue;
+      bb.setFromObject(p.group).getCenter(v1);
+      if (v1.distanceTo(camera.position) > REACH) continue;
+      const s = toScreen(v1);
+      const d = s ? Math.hypot(s.x - x, s.y - y) : 99;
+      if (d < best) { best = d; part = p; }
+    }
+  }
+  if (part && !run) {
+    if (part.installed) { selected = part; refresh(); }
+    else if (held) toast('Your hands are full');
+    else { sfx.pick(); hold(part); const why = reasonInstall(part); if (why) toast(why); }
     return;
   }
-  const h = list[0];
-  selected = h ? partOf(h.object) : null;
-  refresh();
-}
-function focusAt(x, y) {
-  const h = hits(x, y).find((i) => partOf(i.object) !== held);
-  if (!h) { cam.goal.set(0, 1.3, 0); cam.rGoal = camera.aspect < 1 ? 17 : 11; return; }
-  cam.goal.copy(h.point);
-  cam.rGoal = Math.min(cam.rGoal, 5.5);
+  const what = h && h.distance < REACH ? useOf(h.object) : null;
+  if (what) return use(what);
+  if (selected) { selected = null; refresh(); }
 }
 
 /* ================= input ================= */
 const ptrs = new Map();
-let gesture = null, lastTap = { t: 0, x: 0, y: 0 }, pinch = null;
+let stickId = null, stick = { x: 0, y: 0 };
+const keys = {};
+const inStickZone = (x, y) => x < window.innerWidth * 0.45 && y > window.innerHeight * 0.5;
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('pointerdown', (e) => {
   unlockAudio();
+  if (busy) return;
   canvas.setPointerCapture(e.pointerId);
-  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (ptrs.size === 1) {
-    gesture = { mode: e.button === 2 || e.shiftKey ? 'pan' : 'orbit', moved: 0, t: performance.now(), x: e.clientX, y: e.clientY };
-    if (typeof tool === 'number' && !run && gesture.mode === 'orbit') {
-      const b = findBolt(e.clientX, e.clientY);
-      if (b) { gesture.mode = 'bolt'; beginTurn(b); }
-    }
-  } else if (ptrs.size === 2) {
-    endTurn();
-    gesture = { mode: 'pinch', moved: 99 };
-    pinch = pinchState();
+  const p = { x: e.clientX, y: e.clientY, ox: e.clientX, oy: e.clientY, t: performance.now(), moved: 0, mode: 'look' };
+  ptrs.set(e.pointerId, p);
+  if (typeof tool === 'number' && !run && !turning) {
+    const c = findBolt(e.clientX, e.clientY);
+    if (c) { p.mode = 'bolt'; beginTurn(c); return; }
+  }
+  if (e.pointerType !== 'mouse' && stickId === null && inStickZone(e.clientX, e.clientY)) {
+    p.mode = 'stick'; stickId = e.pointerId;
+    const el = $('stick');
+    el.style.left = `${p.ox}px`; el.style.top = `${p.oy}px`; el.firstElementChild.style.transform = '';
+    el.hidden = false;
   }
 });
-function pinchState() {
-  const [a, b] = [...ptrs.values()];
-  return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-}
-function pan(dx, dy) {
-  const k = (2 * cam.r * Math.tan((camera.fov * Math.PI) / 360)) / window.innerHeight;
-  v1.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(-dx * k);
-  v2.setFromMatrixColumn(camera.matrixWorld, 1).multiplyScalar(dy * k);
-  cam.goal.add(v1).add(v2);
-  cam.goal.set(clamp(cam.goal.x, -3.5, 3.5), clamp(cam.goal.y, -2, 4.5), clamp(cam.goal.z, -2.5, 2.5));
-  cam.target.copy(cam.goal);
-}
 canvas.addEventListener('pointermove', (e) => {
   const p = ptrs.get(e.pointerId);
-  if (!p || !gesture) return;
+  if (!p) return;
   const dx = e.clientX - p.x, dy = e.clientY - p.y;
   p.x = e.clientX; p.y = e.clientY;
-  gesture.moved += Math.abs(dx) + Math.abs(dy);
-  if (gesture.mode === 'orbit') {
-    cam.th -= dx * 0.006;
-    cam.ph = clamp(cam.ph - dy * 0.006, 0.08, Math.PI - 0.08);
-  } else if (gesture.mode === 'pan') pan(dx, dy);
-  else if (gesture.mode === 'pinch' && ptrs.size === 2) {
-    const n = pinchState();
-    cam.rGoal = cam.r = clamp((cam.r * pinch.d) / Math.max(n.d, 1), 2.5, 22);
-    pan(n.x - pinch.x, n.y - pinch.y);
-    pinch = n;
+  p.moved += Math.abs(dx) + Math.abs(dy);
+  if (p.mode === 'look') {
+    player.yaw -= dx * 0.0052;
+    player.pitch = clamp(player.pitch - dy * 0.0052, -1.45, 1.45);
+  } else if (p.mode === 'stick') {
+    let sx = (p.x - p.ox) / 50, sy = (p.y - p.oy) / 50;
+    const m = Math.hypot(sx, sy);
+    if (m > 1) { sx /= m; sy /= m; }
+    stick.x = sx; stick.y = sy;
+    $('stick').firstElementChild.style.transform = `translate(${sx * 34}px, ${sy * 34}px)`;
   }
 });
 function pointerEnd(e) {
-  if (!ptrs.has(e.pointerId)) return;
+  const p = ptrs.get(e.pointerId);
+  if (!p) return;
   ptrs.delete(e.pointerId);
-  if (!gesture) return;
-  if (gesture.mode === 'bolt') endTurn();
-  else if (gesture.mode === 'orbit' && gesture.moved < 10 && performance.now() - gesture.t < 400 && e.type === 'pointerup') {
-    const now = performance.now();
-    if (now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) focusAt(e.clientX, e.clientY);
-    else handleTap(e.clientX, e.clientY);
-    lastTap = { t: now, x: e.clientX, y: e.clientY };
-  }
-  if (ptrs.size === 0) gesture = null;
-  else if (ptrs.size === 1) gesture = { mode: 'orbit', moved: 99, t: 0 };
+  if (p.mode === 'bolt') endTurn();
+  if (p.mode === 'stick') { stickId = null; stick.x = stick.y = 0; $('stick').hidden = true; }
+  if (p.mode !== 'bolt' && e.type === 'pointerup' && p.moved < 12 && performance.now() - p.t < 400) handleTap(e.clientX, e.clientY);
 }
 canvas.addEventListener('pointerup', pointerEnd);
 canvas.addEventListener('pointercancel', pointerEnd);
-canvas.addEventListener('wheel', (e) => { e.preventDefault(); cam.rGoal = clamp(cam.rGoal * Math.exp(e.deltaY * 0.001), 2.5, 22); }, { passive: false });
+window.addEventListener('keydown', (e) => { keys[e.code] = true; if (e.code === 'KeyC') { player.crouch = !player.crouch; refresh(); } });
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+function movePlayer(dt) {
+  let mx = stick.x + (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+  let my = stick.y + (keys.KeyS || keys.ArrowDown ? 1 : 0) - (keys.KeyW || keys.ArrowUp ? 1 : 0);
+  const m = Math.hypot(mx, my);
+  if (m > 1) { mx /= m; my /= m; }
+  if (m > 0.05 && !busy) {
+    const weak = stats.hunger <= 0 || stats.thirst <= 0 || stats.energy < 8;
+    const sp = (player.crouch ? 13 : 30) * (weak ? 0.55 : 1) * dt;
+    const s = Math.sin(player.yaw), c = Math.cos(player.yaw);
+    player.x += (mx * c + my * s) * sp;
+    player.z += (-mx * s + my * c) * sp;
+    for (let pass = 0; pass < 2; pass++) {
+      for (const b of world.colliders) {
+        const cx = clamp(player.x, b.x0, b.x1), cz = clamp(player.z, b.z0, b.z1);
+        const dx = player.x - cx, dz = player.z - cz;
+        const d2 = dx * dx + dz * dz;
+        if (d2 >= RADIUS * RADIUS) continue;
+        if (d2 > 1e-6) { const d = Math.sqrt(d2); player.x = cx + (dx / d) * RADIUS; player.z = cz + (dz / d) * RADIUS; }
+        else {                                            // centre is inside the box: leave by the nearest face
+          const l = player.x - b.x0, r = b.x1 - player.x, t = player.z - b.z0, u = b.z1 - player.z, k = Math.min(l, r, t, u);
+          if (k === l) player.x = b.x0 - RADIUS; else if (k === r) player.x = b.x1 + RADIUS; else if (k === t) player.z = b.z0 - RADIUS; else player.z = b.z1 + RADIUS;
+        }
+      }
+    }
+  }
+  player.eye += ((player.crouch ? EYE_CROUCH : EYE) - player.eye) * Math.min(1, dt * 10);
+  camera.position.set(player.x, player.eye, player.z);
+  camera.rotation.set(player.pitch, player.yaw, 0);
+}
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.fov = camera.aspect < 1 ? 78 : 62;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
 
 /* ================= starting the engine ================= */
 function diagnose() {
@@ -514,11 +588,11 @@ function diagnose() {
   fails.sort((a, b) => a.t - b.t);
   return { fail: fails[0] || null, loud: !T('exhaust') };
 }
-
 function startEngine() {
-  if (run) return;
-  drop(); endTurn(); selected = null;
-  $('drawer').hidden = true;
+  if (run || busy) return;
+  if (Math.hypot(player.x - ENGINE_POS.x, player.z - ENGINE_POS.z) > 45) return toast('Go over to the engine first');
+  if (held) drop();
+  endTurn(); selected = null;
   const d = diagnose();
   motor.start();
   motor.set(0, { starter: true });
@@ -530,7 +604,7 @@ function stopEngine(msg, title) {
   if (!run) return;
   motor.stop();
   run = null;
-  engineRoot.position.set(0, 0, 0);
+  engineRoot.position.copy(ENGINE_POS);
   refresh();
   if (msg) modal(title || 'It died', `<p>${msg}</p>`, [['Back to the spanners', null, 'primary']]);
 }
@@ -552,24 +626,26 @@ function tickEngine(dt) {
     $('rpm').textContent = Math.round(run.rpm / 10) * 10;
     const f = d.fail;
     if (f) {
-      if (f.leak) oil.scale.setScalar(Math.min(3.2, oil.scale.x + dt * 0.5));
+      if (f.leak) oil.scale.setScalar(Math.min(9, oil.scale.x + dt * 1.4));
       if (run.t > f.t) { if (f.bang) { sfx.bang(); buzz(200); } return stopEngine(f.msg); }
     } else if (!d.loud && !won && run.t > 6) {
       won = true; save(); sfx.win();
       const m = Math.floor(playTime / 60), s = Math.floor(playTime % 60);
-      modal('It runs.', `<p>${totalBolts} bolts, ${fitted.length} parts, and it idles like it left the factory.</p><p>Build time: <b>${m}m ${String(s).padStart(2, '0')}s</b></p><p>Use the throttle on the right. Reset the build from the menu to do it all again, faster.</p>`, [['Rev it', null, 'primary']]);
+      modal('It runs.', `<p>${totalBolts} bolts, ${fitted.length} parts, and it idles like it left the factory.</p><p>Built in <b>${time.day} day${time.day > 1 ? 's' : ''}</b> (${m}m ${String(s).padStart(2, '0')}s of your life).</p><p>The throttle is on the right. Next job: getting it into the car.</p>`, [['Rev it', null, 'primary']]);
     }
-    // exhaust smoke
     run.emit += dt * (4 + run.rpm / 300);
     while (run.emit > 1) { run.emit -= 1; puff(f && f.steam && run.t > f.t * 0.5); }
     const k = 0.006 + run.rpm / 600000;
-    engineRoot.position.set((Math.random() - 0.5) * k, (Math.random() - 0.5) * k, (Math.random() - 0.5) * k);
+    engineRoot.position.set(ENGINE_POS.x + (Math.random() - 0.5) * k, ENGINE_POS.y + (Math.random() - 0.5) * k, ENGINE_POS.z + (Math.random() - 0.5) * k);
   }
   run.theta += (run.rpm / 60) * Math.PI * 2 * dt * 0.35;
   setCrank(parts, run.theta);
 }
 
 /* smoke + oil */
+const fx = new THREE.Group();
+fx.position.copy(ENGINE_POS);
+scene.add(fx);
 const smokeTex = (() => {
   const c = document.createElement('canvas'); c.width = c.height = 64;
   const g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 2, 32, 32, 30);
@@ -581,7 +657,7 @@ const puffs = [];
 for (let i = 0; i < 40; i++) {
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, transparent: true, depthWrite: false, opacity: 0 }));
   s.visible = false; s.raycast = () => {};
-  scene.add(s);
+  fx.add(s);
   puffs.push({ s, life: 0, v: new THREE.Vector3() });
 }
 function puff(steam) {
@@ -592,7 +668,7 @@ function puff(steam) {
   if (steam) p.s.position.set((Math.random() - 0.5) * 4, 2.45, (Math.random() < 0.5 ? -1 : 1) * 0.95);
   p.v.set(ex && !steam ? 0.9 : (Math.random() - 0.5) * 0.4, steam ? 1.4 : 0.5, steam ? 0 : 0.7);
   p.s.material.color.set(steam ? 0xffffff : 0x8a8a8a);
-  p.life = p.max = 1.6; p.s.visible = true; p.s.scale.setScalar(0.3);
+  p.life = p.max = 1.8; p.s.visible = true; p.s.scale.setScalar(0.3);
 }
 function tickPuffs(dt) {
   for (const p of puffs) {
@@ -600,13 +676,14 @@ function tickPuffs(dt) {
     p.life -= dt;
     p.s.position.addScaledVector(p.v, dt);
     p.v.y += dt * 0.5;
-    p.s.scale.addScalar(dt * 1.1);
+    p.s.scale.addScalar(dt * 1.3);
     p.s.material.opacity = Math.max(0, p.life / p.max) * 0.5;
     if (p.life <= 0) p.s.visible = false;
   }
 }
 const oil = new THREE.Mesh(new THREE.CircleGeometry(1, 40), new THREE.MeshStandardMaterial({ color: 0x0b0906, roughness: 0.15, metalness: 0.4 }));
-oil.rotation.x = -Math.PI / 2; oil.position.set(0.2, FLOOR_Y + 0.02, 0.2); oil.scale.setScalar(0.001); oil.receiveShadow = true;
+oil.rotation.x = -Math.PI / 2; oil.position.set(ENGINE_POS.x + 0.2, 0.1, ENGINE_POS.z + 0.2); oil.scale.setScalar(0.001);
+oil.raycast = () => {};
 scene.add(oil);
 
 /* ================= main loop ================= */
@@ -619,18 +696,27 @@ function watchFps(rawDt) {
   if (slowFrames < 45) return;
   slowFrames = 0; quality++;
   renderer.setPixelRatio(quality === 1 ? Math.min(window.devicePixelRatio || 1, 1.25) : 1);
-  if (quality === 2) { renderer.shadowMap.enabled = false; sun.castShadow = false; }
+  if (quality === 2) { renderer.shadowMap.enabled = false; world.spot.castShadow = false; }
   resize();
 }
+let hudT = 0;
 function frame(now) {
   watchFps((now - last) / 1000);
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  if (!won && !document.hidden) playTime += dt;
+  const paused = !$('modal').hidden || document.hidden;
+
+  if (!paused && !busy) {
+    if (!won) playTime += dt;
+    advance((dt / DAY_SECONDS) * 24);
+    tickStats(dt);
+  }
+  movePlayer(paused ? 0 : dt);
 
   if (turning) {
     const b = turning;
-    const t = clamp(b.tight + (dir * dt) / 1.1, 0, 1);
+    const slow = stats.energy < 8 ? 0.5 : 1;
+    const t = clamp(b.tight + (dir * dt * slow) / 1.1, 0, 1);
     setTight(b, t);
     if (Math.abs(t - b.click) > 0.06) { b.click = t; sfx.ratchet(); }
     b.head.getWorldPosition(spanner.position);
@@ -647,39 +733,38 @@ function frame(now) {
     p.group.position.set(p.base.x + p.from[0] * k, p.base.y + p.from[1] * k, p.base.z + p.from[2] * k);
     if (p.anim >= 1) delete p.anim;
   }
-  if (held) {
-    const pulse = 0.3 + 0.15 * Math.sin(now * 0.006);
-    ghostOk.opacity = ghostNo.opacity = pulse;
-  }
+  if (held) ghostOk.opacity = ghostNo.opacity = 0.32 + 0.16 * Math.sin(now * 0.006);
   if (run) tickEngine(dt);
   tickPuffs(dt);
+  if ((hudT += dt) > 0.25) { hudT = 0; applyTime(); refreshStats(); }
 
-  cam.target.lerp(cam.goal, Math.min(1, dt * 8));
-  cam.r += (cam.rGoal - cam.r) * Math.min(1, dt * 8);
-  placeCamera();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
 
 /* ================= boot ================= */
 buildTools();
+stockShelf();
 const hadSave = load();
 setCrank(parts, 0);
-refresh();
-if (!hadSave) modal('Bolt by Bolt', `<p>One bare engine block on a stand. ${fitted.length} parts on the shelf. ${totalBolts} bolts between you and a running engine.</p>${HELP}`, [['Get to work', null, 'primary']]);
-setInterval(() => { if (!run) save(); }, 15000);
+applyTime(); refreshStats(); refresh();
+if (!hadSave) modal('Bolt by Bolt', `<p>Your garage. A coupe with no engine, an engine block on a stand, and ${fitted.length} parts on the shelf at the back. ${totalBolts} bolts to go.</p>${HELP}`, [['Get to work', null, 'primary']]);
+setInterval(() => { if (!run && !busy) save(); }, 15000);
 requestAnimationFrame(frame);
 
 // Hooks for tests and for the curious.
 window.__game = {
-  parts, byId, diagnose, install, uninstall, hold, findBolt, camera, cam,
-  get state() { return { tool, dir, held: held && held.id, selected: selected && selected.id, run: run && run.phase, won }; },
+  parts, byId, player, stats, time, world, diagnose, install, uninstall, hold, drop, use, findBolt, camera, handleTap,
+  get state() { return { tool, dir, held: held && held.id, selected: selected && selected.id, run: run && run.phase, won, busy }; },
   buildAll(tight = true) {
+    if (held) { setGhost(held, false); held = null; }
     for (const p of fitted) { if (!p.installed) install(p, true); p.bolts.forEach((b) => setTight(b, tight ? 1 : 0)); }
     save(); refresh();
   },
-  boltScreen(b) {
-    b.head.getWorldPosition(v1).project(camera);
-    return { x: (v1.x + 1) / 2 * window.innerWidth, y: (1 - v1.y) / 2 * window.innerHeight };
+  lookAt(x, y, z) {
+    const dx = x - player.x, dy = y - (player.crouch ? EYE_CROUCH : EYE), dz = z - player.z;
+    player.yaw = Math.atan2(-dx, -dz); player.pitch = Math.atan2(dy, Math.hypot(dx, dz));
   },
+  screenOf(obj) { bb.setFromObject(obj).getCenter(v3); return toScreen(v3); },
+  boltScreen(b) { b.head.getWorldPosition(v3); return toScreen(v3); },
 };

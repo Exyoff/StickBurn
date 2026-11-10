@@ -425,3 +425,5 @@ export function buildSpanner() {
   g.traverse((o) => { o.castShadow = false; o.raycast = () => {}; });
   return g;
 }
+
+export { M, mesh, box, cyl, tube, extrudeX };

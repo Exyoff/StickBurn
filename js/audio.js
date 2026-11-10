@@ -84,3 +84,7 @@ export const motor = {
     setTimeout(() => { try { v.a.stop(); v.b.stop(); } catch {} }, 600);
   },
 };
+
+sfx.drink = () => { [0, 140, 280].forEach((d) => setTimeout(() => tone('sine', 300, 180, 0.09, 0.18), d)); };
+sfx.eat = () => { [0, 170, 340].forEach((d) => setTimeout(() => hiss(0.07, 0.25, 1200, 'lowpass'), d)); };
+sfx.pick = () => { tone('sine', 200, 320, 0.07, 0.15); };
