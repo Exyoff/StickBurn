@@ -1,0 +1,11 @@
+{
+  "name": "Bolt by Bolt",
+  "short_name": "Bolt by Bolt",
+  "description": "Build an engine in 3D, one bolt at a time.",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#17181a",
+  "theme_color": "#17181a",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
