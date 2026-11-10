@@ -2,14 +2,14 @@
 // body, wheels, gearbox, one seat, steering wheel, dash and shifter. No doors, no bonnet, no engine.
 // Units: 1 = 10 cm. Local axes: X across (driver on -X), Y up, Z along the car with the nose at -Z.
 //
-// Reference dimensions (S13 fastback): length 4.52 m · width 1.69 m · height 1.29 m · wheelbase 2.474 m
+// Reference dimensions (S13 fastback, from a dimensioned blueprint): length 4.535 m · width 1.69 m · height 1.29 m · wheelbase 2.475 m
 //   195/60 R15 tyres (615 mm diameter) on 15" seven-spoke alloys, four-stud hubs
-// Shape taken from photographs: low wedge nose with the pop-up lamps closed, long sloping hatch glass,
+// Side profile and plan outline traced from the blueprint, details from photographs: low wedge nose with the pop-up lamps closed, long sloping hatch glass,
 // black window pillars, full-width tail-lamp band, small lip spoiler. No badges.
 import * as THREE from '../vendor/three.module.min.js';
 import { MAT, TEX, mesh, box, cyl, lathe, rbox, bake } from './geo.js';
 
-const LEN = 22.6, AXLE_F = -12.6, AXLE_R = 12.14, WHEEL_R = 3.08, ARCH_R = 3.5, HALF_W = 8.45;
+const LEN = 22.675, AXLE_F = -12.75, AXLE_R = 12.0, WHEEL_R = 3.08, ARCH_R = 3.75, HALF_W = 8.46;
 
 // Smooth curve through [z, value] keys (cubic Hermite with finite-difference tangents).
 function keyed(keys) {
@@ -26,12 +26,14 @@ function keyed(keys) {
   };
 }
 // Body lines, nose to tail.
-const W = keyed([[-22.6, 6.2], [-22.1, 7.6], [-20.5, 8.2], [-17, 8.4], [-12, HALF_W], [12, HALF_W], [18, 8.4], [21, 8.1], [22.2, 7.5], [22.6, 6.3]]);                       // half width
-const Y0 = keyed([[-22.6, 3.6], [-22.1, 2.6], [-20.5, 2.1], [-17, 2.0], [18, 2.0], [21, 2.6], [22.2, 3.2], [22.6, 4.0]]);                                           // underside
-const BELT = keyed([[-22.6, 5.2], [-22, 5.8], [-19, 6.5], [-14, 7.3], [-8, 8.3], [0, 8.8], [9, 9.0], [15, 9.2], [20, 9.1], [22, 8.7], [22.6, 7.6]]);
-const EX = keyed([[-22.6, 5.2], [-22, 6.4], [-19, 7.0], [-14, 7.3], [-8, 7.3], [-2.3, 5.7], [7, 5.6], [13, 6.3], [18.5, 7.0], [22, 6.8], [22.6, 5.6]]);             // bonnet edge / roof rail
-const EY = keyed([[-22.6, 5.5], [-22, 6.1], [-19, 6.75], [-14, 7.55], [-8, 8.6], [-2.3, 12.15], [2, 12.5], [7, 12.25], [13, 10.95], [18.5, 9.45], [22, 9.05], [22.6, 8.1]]);
-const TOP = keyed([[-22.6, 5.6], [-22, 6.3], [-19, 6.9], [-14, 7.7], [-8, 8.75], [-2.3, 12.5], [2, 12.9], [7, 12.6], [13, 11.2], [18.5, 9.6], [22, 9.2], [22.6, 8.2]]);   // wedge nose, fastback tail
+const W = keyed([[-LEN, 5.6], [-21.6, 6.6], [-20.4, 7.16], [-19.3, 7.5], [-18.2, 7.75], [-17.1, 8.1], [-16, HALF_W], [13, HALF_W], [15.2, 8.3], [17.5, 8.1], [19.7, 7.9], [20.8, 7.7], [21.9, 7.2], [LEN, 6.6]]);   // half width (plan view)
+const Y0 = keyed([[-LEN, 3.4], [-21.6, 2.6], [-20.4, 1.9], [-17, 1.85], [-15.5, 2.2], [15.5, 2.25], [17.6, 2.8], [21, 3.15], [22.3, 3.7], [LEN, 4.0]]);                    // underside
+const BELT = keyed([[-LEN, 4.6], [-21.6, 5.6], [-20.4, 6.1], [-16, 7.2], [-13, 7.75], [-7.4, 8.3], [0, 8.7], [8, 8.9], [14, 9.05], [19, 9.0], [21.2, 8.9], [22.3, 8.5], [LEN, 7.8]]);
+const EX = keyed([[-LEN, 5.0], [-21.6, 5.9], [-20.4, 6.4], [-16, 7.2], [-7.4, 7.3], [-0.8, 5.7], [5.3, 5.6], [12, 6.1], [18.8, 6.9], [21.2, 6.8], [22.3, 6.5], [LEN, 6.1]]);   // bonnet edge / roof rail
+const EY = keyed([[-LEN, 4.9], [-21.6, 6.0], [-20.4, 6.55], [-18.2, 7.3], [-16, 7.7], [-13.7, 8.05], [-11.5, 8.4], [-9.2, 8.6], [-7.4, 8.55], [-5.9, 9.1], [-3.6, 10.55], [-1.4, 11.95],
+  [0.8, 12.5], [5.3, 12.5], [7.6, 12.15], [9.8, 11.8], [12, 11.3], [14.3, 10.65], [16.5, 10.1], [18.8, 9.42], [21.2, 9.27], [22.3, 8.87], [LEN, 8.2]]);
+const TOP = keyed([[-LEN, 5.0], [-21.6, 6.15], [-20.4, 6.7], [-18.2, 7.45], [-16, 7.85], [-13.7, 8.2], [-11.5, 8.55], [-9.2, 8.75], [-7.4, 8.7], [-5.9, 9.35], [-3.6, 10.85], [-1.4, 12.3],
+  [0.8, 12.88], [5.3, 12.88], [7.6, 12.5], [9.8, 12.1], [12, 11.55], [14.3, 10.85], [16.5, 10.25], [18.8, 9.55], [21.2, 9.4], [22.3, 9.0], [LEN, 8.3]]);                      // side profile, roof at 1.29 m
 
 const NA = 9, NB = 5, NC = 5, NJ = NA + NB + NC + 1;      // cells up the side, over the shoulder, across the top
 function section(z) {
@@ -43,16 +45,16 @@ function section(z) {
 }
 // What a body cell is: painted metal, glass, or an opening.
 function cellKind(j, z) {
-  if (j < NA) return z > -3.4 && z < 9.0 && j >= 1 ? null : 'body';                    // door aperture above the sill
+  if (j < NA) return z > -4.2 && z < 7.6 && j >= 1 ? null : 'body';                    // door aperture above the sill
   if (j < NA + NB) {
     const r = j - NA;
-    if (z > -3.4 && z < 9.0) return r < NB - 1 ? null : 'trim';                        // side window opening; black roof rail stays
-    if (z > 9.6 && z < 15.2 && r >= 1 && r < NB - 1) return 'glass';                   // rear quarter window
-    return z > -8 && z < 17 ? 'trim' : 'body';                                         // black pillars around the glasshouse
+    if (z > -4.2 && z < 7.6) return r < NB - 1 ? null : 'trim';                        // side window opening; black roof rail stays
+    if (z > 8.3 && z < 14.6 && r >= 1 && r < NB - 1) return 'glass';                   // rear quarter window
+    return z > -7.4 && z < 17 ? 'trim' : 'body';                                         // black pillars around the glasshouse
   }
-  if (z > -7.9 && z < -2.4) return 'glass';                                            // windscreen
-  if (z > 7.2 && z < 18.3) return 'glass';                                             // hatch glass
-  if (z > -20.5 && z < -8.4) return null;                                              // no bonnet
+  if (z > -7.2 && z < -1.0) return 'glass';                                            // windscreen
+  if (z > 6.3 && z < 18.2) return 'glass';                                             // hatch glass
+  if (z > -20 && z < -7.9) return null;                                              // no bonnet
   return 'body';
 }
 function bodyShell(paint, glass, trim) {
@@ -153,64 +155,64 @@ export function buildCar() {
 
   // structure you can see through the door openings and the open bonnet
   car.add(
-    box(15.6, 0.4, 27.5, primer, 0, 2.25, 4.4),                                    // floor pan
-    box(15.8, 6.2, 0.4, primer, 0, 5.4, -9.0),                                // firewall
-    box(15.8, 6.4, 0.4, primer, 0, 5.5, 9.2),                                 // rear bulkhead
-    box(14.6, 0.3, 8.4, MAT.plastic, 0, 8.6, 13.5),                                // parcel shelf
+    box(15.4, 0.4, 24.4, primer, 0, 2.45, 3.8),                                    // floor pan
+    box(15.8, 6.2, 0.4, primer, 0, 5.4, -8.2),                                // firewall
+    box(15.8, 6.4, 0.4, primer, 0, 5.5, 8.0),                                 // rear bulkhead
+    box(14.6, 0.3, 9.5, MAT.plastic, 0, 8.6, 12.75),                                // parcel shelf
     rbox(2.8, 1.9, 17, 0.4, primer, 0, 3.2, -0.6),                            // transmission tunnel
     box(13.6, 0.5, 0.5, MAT.black, 0, 6.2, -20.6),                              // radiator support
     box(8.6, 3.4, 0.45, MAT.dark, 0, 4.3, -21.0),                               // radiator
     box(9.4, 0.6, 1.2, MAT.black, 0, 2.3, AXLE_F),                            // front crossmember
     rbox(2.6, 1.9, 1.7, 0.15, MAT.plastic, 4.2, 4.2, -11.0), box(3.0, 0.2, 2.1, MAT.black, 4.2, 3.15, -11.0),   // battery on its tray
-    lathe([[0, 0], [0.45, 0], [0.45, 1.5], [0.6, 1.6], [0.6, 2.0], [0, 2.0]], MAT.alu, 'z', 16, -4.3, 7.4, -11.5),   // brake master cylinder
+    lathe([[0, 0], [0.45, 0], [0.45, 1.5], [0.6, 1.6], [0.6, 2.0], [0, 2.0]], MAT.alu, 'z', 16, -4.3, 7.4, -10.2),   // brake master cylinder
   );
   for (const s of [-1, 1]) {
     car.add(
-      box(0.4, 4.6, 11.4, primer, s * 5.6, 4.6, -14.9),                       // inner wing
+      box(0.4, 4.6, 12, primer, s * 5.6, 4.6, -14.4),                       // inner wing
       box(0.9, 0.9, 10, MAT.black, s * 4.6, 2.75, -14.9),                      // chassis rail
       lathe([[0, 0], [1.0, 0], [0.9, 0.45], [0.35, 0.5], [0, 0.5]], primer, 'y', 24, s * 6.5, 6.55, AXLE_F),   // strut tower
-      rbox(1.5, 0.5, 0.3, 0.1, amber, s * 4.8, 4.75, -LEN), rbox(4.2, 1.5, 0.3, 0.1, tail, s * 3.9, 7.0, LEN), rbox(1.6, 0.6, 0.32, 0.1, amber, s * 5.1, 6.55, LEN),
-      box(0.5, 0.5, 1.2, paint, s * 5.6, 9.45, 20.9),                          // spoiler stanchion
+      rbox(1.4, 0.45, 0.3, 0.1, amber, s * 4.1, 4.45, -LEN), rbox(4.0, 1.4, 0.3, 0.1, tail, s * 3.9, 7.3, LEN), rbox(1.5, 0.5, 0.32, 0.1, amber, s * 4.9, 6.9, LEN),
+      box(0.5, 0.5, 1.2, paint, s * 5.6, 9.55, 20.7),                          // spoiler stanchion
     );
     for (const zc of [AXLE_F, AXLE_R]) {
       // wheel-arch liner: an open half-drum over the tyre, closed on the inboard side
-      const tub = new THREE.Mesh(new THREE.CylinderGeometry(ARCH_R + 0.04, ARCH_R + 0.04, 2.5, 28, 1, true, Math.PI - 0.3, Math.PI + 0.6).rotateZ(-Math.PI / 2), liner);
-      tub.position.set(s * 6.85, WHEEL_R, zc);
+      const tub = new THREE.Mesh(new THREE.CylinderGeometry(ARCH_R + 0.04, ARCH_R + 0.04, 2.2, 28, 1, true, Math.PI - 0.3, Math.PI + 0.6).rotateZ(-Math.PI / 2), liner);
+      tub.position.set(s * 6.7, WHEEL_R, zc);
       const end = new THREE.Mesh(new THREE.CircleGeometry(ARCH_R + 0.04, 28, -0.3, Math.PI + 0.6).rotateY(Math.PI / 2), liner);
       end.position.set(s * 5.6, WHEEL_R, zc);
       car.add(tub, end, wheel(s * (HALF_W - 1.0), zc, s));
     }
   }
   car.add(
-    box(5.6, 0.5, 0.1, MAT.plastic, 0, 4.2, -LEN - 0.03),                    // intake slot under the nose
-    box(12.6, 1.9, 0.16, MAT.plastic, 0, 6.95, LEN),                          // black band the tail lamps sit in
-    rbox(3.6, 1.5, 0.3, 0.1, MAT.plastic, 0, 7.0, LEN),                      // centre garnish between the tail lamps
-    box(3.2, 1.0, 0.1, MAT.ceramic, 0, 4.9, LEN + 0.03),                     // number plate
-    box(12.4, 0.25, 1.7, paint, 0, 9.8, 20.9),                               // lip spoiler
+    box(5.0, 0.4, 0.1, MAT.plastic, 0, 3.85, -LEN - 0.03),                    // intake slot under the nose
+    box(11.8, 1.8, 0.16, MAT.plastic, 0, 7.3, LEN),                          // black band the tail lamps sit in
+    rbox(3.6, 1.4, 0.3, 0.1, MAT.plastic, 0, 7.3, LEN),                      // centre garnish between the tail lamps
+    box(3.2, 1.0, 0.1, MAT.ceramic, 0, 5.3, LEN + 0.03),                     // number plate
+    box(12.4, 0.25, 1.7, paint, 0, 9.85, 20.7),                               // lip spoiler
   );     // grille, number plate
 
   // gearbox bellhousing poking through the firewall, waiting for an engine
   car.add(
-    lathe([[0, 0], [2.1, 0], [2.1, 0.25], [1.9, 0.5], [1.3, 2.1], [0, 2.1]], MAT.alu, 'z', 28, 0, 4.3, -11.6),
-    cyl(1.85, 0.02, MAT.plastic, 'z', 0, 4.3, -11.61, 28), cyl(0.2, 0.9, MAT.steel, 'z', 0, 4.3, -11.9, 12),
+    lathe([[0, 0], [2.1, 0], [2.1, 0.25], [1.9, 0.5], [1.3, 2.1], [0, 2.1]], MAT.alu, 'z', 28, 0, 4.3, -10.4),
+    cyl(1.85, 0.02, MAT.plastic, 'z', 0, 4.3, -10.41, 28), cyl(0.2, 0.9, MAT.steel, 'z', 0, 4.3, -10.7, 12),
   );
 
   // cabin: one seat, wheel, dash, pedals, shifter
   const X = -4.3;
   const back = rbox(4.8, 6.4, 1.4, 0.4, cloth, X, 6.9, 4.7); back.rotation.x = 0.22;
   const rim = new THREE.Mesh(new THREE.TorusGeometry(1.85, 0.2, 12, 40), MAT.plastic);
-  rim.position.set(X, 8.7, -4.4); rim.rotation.x = -0.38; rim.castShadow = true;
-  const column = cyl(0.3, 3.4, MAT.plastic, 'z', X, 8.15, -5.9, 12); column.rotation.x = -0.38;
+  rim.position.set(X, 8.7, -3.6); rim.rotation.x = -0.38; rim.castShadow = true;
+  const column = cyl(0.3, 3.4, MAT.plastic, 'z', X, 8.15, -5.1, 12); column.rotation.x = -0.38;
   const knob = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 12), MAT.ceramic); knob.position.set(0, 6.5, -1.5);
   car.add(
-    rbox(15.4, 2.6, 3.0, 0.5, MAT.plastic, 0, 7.4, -7.3), rbox(4.2, 1.4, 1.6, 0.4, MAT.plastic, X, 9.0, -7.4),
-    cyl(0.62, 0.06, MAT.ceramic, 'z', X - 0.8, 9.0, -6.58, 20), cyl(0.62, 0.06, MAT.ceramic, 'z', X + 0.8, 9.0, -6.58, 20),
-    rim, column, cyl(0.5, 0.4, MAT.plastic, 'z', X, 8.7, -4.4, 16),
+    rbox(15.4, 2.6, 3.0, 0.5, MAT.plastic, 0, 7.4, -6.5), rbox(4.2, 1.2, 1.6, 0.4, MAT.plastic, X, 8.9, -6.6),
+    cyl(0.5, 0.06, MAT.ceramic, 'z', X - 0.8, 8.9, -5.78, 20), cyl(0.5, 0.06, MAT.ceramic, 'z', X + 0.8, 8.9, -5.78, 20),
+    rim, column, cyl(0.5, 0.4, MAT.plastic, 'z', X, 8.7, -3.6, 16),
     rbox(4.8, 1.3, 5.0, 0.35, cloth, X, 3.2, 1.6), back, rbox(2.6, 1.9, 1.0, 0.35, cloth, X, 10.9, 5.75),
     lathe([[0, 0], [0.75, 0], [0.2, 0.9], [0, 0.9]], MAT.plastic, 'y', 16, 0, 4.15, -1.5), cyl(0.11, 1.6, MAT.steel, 'y', 0, 5.6, -1.5, 8), knob,
     box(0.6, 0.3, 3.2, MAT.plastic, 1.0, 4.4, 2.6),                                                              // handbrake
   );
-  for (const [dx, w] of [[-1.4, 0.7], [-0.2, 0.7], [1.0, 0.5]]) { const p = box(w, 1.1, 0.15, MAT.steel, X + dx, 3.3, -8.6); p.rotation.x = -0.4; car.add(p); }
-  for (let i = 0; i < 3; i++) { const sp = box(0.3, 1.7, 0.12, MAT.plastic, X + Math.sin(i * 2.094 + 3.14) * 0.9, 8.7 + Math.cos(i * 2.094 + 3.14) * 0.85, -4.4); sp.rotation.set(-0.38, 0, -(i * 2.094 + 3.14)); car.add(sp); }
+  for (const [dx, w] of [[-1.4, 0.7], [-0.2, 0.7], [1.0, 0.5]]) { const p = box(w, 1.1, 0.15, MAT.steel, X + dx, 3.3, -7.7); p.rotation.x = -0.4; car.add(p); }
+  for (let i = 0; i < 3; i++) { const sp = box(0.3, 1.7, 0.12, MAT.plastic, X + Math.sin(i * 2.094 + 3.14) * 0.9, 8.7 + Math.cos(i * 2.094 + 3.14) * 0.85, -3.6); sp.rotation.set(-0.38, 0, -(i * 2.094 + 3.14)); car.add(sp); }
   return bake(car, false);
 }

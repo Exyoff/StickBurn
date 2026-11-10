@@ -24,8 +24,8 @@ Everything is modelled in code at true size (1 unit = 10 cm) from real-world ref
 - **Engine** (`js/engine.js`): a 1.6 L SOHC eight-valve four — 81 mm bore, 86.4 mm stroke, 88 mm bore spacing, 144 mm rods,
   five 54 mm main bearings, 270 mm flywheel with ring gear, 3/8" roller timing chain. Fastener heads are true size, so the
   spanner size is the distance across the flats.
-- **Car** (`js/car.js`): an S13-style fastback shaped from reference photos — 4.52 m long, 1.69 m wide, 1.29 m high,
-  2.474 m wheelbase, 195/60 R15 tyres on seven-spoke alloys. Wedge nose, sloping hatch glass, black pillars, lip spoiler. No badges.
+- **Car** (`js/car.js`): an S13-style fastback traced from a dimensioned blueprint and reference photos — 4.535 m long, 1.69 m wide, 1.29 m high,
+  2.475 m wheelbase, 195/60 R15 tyres on seven-spoke alloys. Wedge nose, sloping hatch glass, black pillars, lip spoiler. No badges.
 - **Garage** (`js/world.js`): 6 x 8.7 m, 2.8 m ceiling, 2.2 m door opening, standard furniture and worktop sizes.
 
 Surface finishes (sand-cast iron and aluminium, machined steel, crinkle paint, rust, tyre tread) are generated procedurally.
