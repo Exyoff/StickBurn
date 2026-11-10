@@ -176,7 +176,7 @@ export function buildWorld(scene) {
   const car = buildCar();
   car.position.set(17.3, 0, 59.5);
   g.add(car);
-  colliders.push({ x0: 17.3 - 9.4, x1: 17.3 + 9.4, z0: 59.5 - 22.6, z1: 59.5 + 22.7 });
+  colliders.push({ x0: 17.3 - 8.7, x1: 17.3 + 8.7, z0: 59.5 - 22.9, z1: 59.5 + 22.9 });
 
   return { group: g, colliders, surfaces, sun, patch, lamps, spot };
 }

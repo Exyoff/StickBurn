@@ -3,7 +3,7 @@
 A first-person mobile web game: you live in a garage and build an engine, one bolt at a time.
 
 You wake up in a two-car garage, half of it walled off as a bedroom, kitchen and bathroom.
-A 2010-ish sport coupe sits in the bay — rolling shell, gearbox, one seat, steering wheel, dash and shifter, no doors, no engine.
+A red early-90s fastback sits in the bay — rolling shell, gearbox, one seat, steering wheel, dash and shifter, no doors, no engine.
 A bare engine block hangs on a stand. 34 engine parts are on the shelf along the back wall, held on by 91 bolts in eight spanner sizes.
 Nobody tells you which size fits.
 
@@ -24,7 +24,8 @@ Everything is modelled in code at true size (1 unit = 10 cm) from real-world ref
 - **Engine** (`js/engine.js`): a 1.6 L SOHC eight-valve four — 81 mm bore, 86.4 mm stroke, 88 mm bore spacing, 144 mm rods,
   five 54 mm main bearings, 270 mm flywheel with ring gear, 3/8" roller timing chain. Fastener heads are true size, so the
   spanner size is the distance across the flats.
-- **Car** (`js/car.js`): a 2010-class sport coupe — 4.40 m long, 1.82 m wide, 1.32 m high, 2.65 m wheelbase, 245/40 R18 tyres.
+- **Car** (`js/car.js`): an S13-style fastback shaped from reference photos — 4.52 m long, 1.69 m wide, 1.29 m high,
+  2.474 m wheelbase, 195/60 R15 tyres on seven-spoke alloys. Wedge nose, sloping hatch glass, black pillars, lip spoiler. No badges.
 - **Garage** (`js/world.js`): 6 x 8.7 m, 2.8 m ceiling, 2.2 m door opening, standard furniture and worktop sizes.
 
 Surface finishes (sand-cast iron and aluminium, machined steel, crinkle paint, rust, tyre tread) are generated procedurally.
